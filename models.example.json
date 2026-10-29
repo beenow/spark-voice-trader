@@ -1,0 +1,10 @@
+{
+ "default": "llama-1b-loop",
+ "models": [
+  {"name": "llama-1b-loop", "label": "Llama 1B + Spark (memory)", "family": "llama",
+   "adapter": "~/.leaps-voice-agent/adapters/llama-1b-loop", "frame_line": true},
+  {"name": "glimmer-base", "label": "Glimmer base", "family": "glimmer", "adapter": null},
+  {"name": "glimmer-spark", "label": "Glimmer + Spark", "family": "glimmer",
+   "adapter": "~/.leaps-voice-agent/adapters/glimmer-spark"}
+ ]
+}
