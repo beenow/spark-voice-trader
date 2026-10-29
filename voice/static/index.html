@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0b0d10">
+<title>Leaps Voice</title>
+<style>
+  :root {
+    --bg: #0b0d10; --panel: #14181d; --line: #232a32; --text: #e7ebef; --dim: #8a96a3;
+    --accent: #3fb68b; --accent-2: #2a7d60; --warn: #e2b04a; --bad: #e5604f; --tool: #6aa8ff;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; padding: env(safe-area-inset-top) 16px env(safe-area-inset-bottom); }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 0 8px; }
+  header h1 { font-size: 17px; margin: 0; flex: 1; letter-spacing: .2px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--bad); flex: none; }
+  .dot.on { background: var(--accent); }
+  #status { color: var(--dim); font-size: 12px; }
+  #models { display: flex; align-items: center; gap: 8px; padding: 0 0 8px; flex-wrap: wrap; }
+  #models select { flex: 1 1 120px; min-width: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 8px; font: inherit; font-size: 14px; }
+  #models label { color: var(--dim); font-size: 13px; display: flex; align-items: center; gap: 4px; white-space: nowrap; }
+  #models .vs { color: var(--dim); font-size: 12px; }
+  .cmp { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; margin-top: 4px; }
+  .lane { min-width: 0; border-top: 2px solid var(--accent-2); padding-top: 4px; }
+  .lane + .lane { border-top-color: var(--tool); }
+  .lane h4 { margin: 0 0 4px; font-size: 12px; color: var(--dim); font-weight: 600; }
+  .lane .tool, .lane .res { font-size: 11px; word-break: break-word; }
+  .lane .res { padding-left: 6px; }
+  .lane .ans { font-size: 14px; }
+  .play { margin-top: 6px; background: none; color: var(--tool); border: 1px solid var(--tool); border-radius: 8px;
+    padding: 6px 10px; font: inherit; font-size: 13px; }
+  #trace { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; min-height: 120px; }
+  .turn { border-bottom: 1px solid var(--line); padding: 8px 0 10px; }
+  .turn:last-child { border-bottom: 0; }
+  .row { margin: 3px 0; word-wrap: break-word; }
+  .q { font-weight: 600; font-size: 16px; }
+  .q .src { color: var(--dim); font-weight: 400; font-size: 11px; margin-left: 6px; }
+  .tool { font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; color: var(--tool); }
+  .res { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--dim); padding-left: 12px; }
+  .res b { color: var(--text); font-weight: 500; }
+  .filler { color: var(--dim); font-style: italic; }
+  .ans { font-size: 16px; color: #fff; margin-top: 6px; }
+  .err { color: var(--bad); }
+  .tim { color: var(--dim); font-size: 12px; font-family: ui-monospace, Menlo, monospace; margin-top: 4px; }
+  .ticket { margin-top: 8px; padding: 10px; border: 1px solid var(--warn); border-radius: 10px; }
+  .ticket button { margin-top: 8px; width: 100%; padding: 12px; border: 0; border-radius: 8px;
+    background: var(--warn); color: #111; font: inherit; font-weight: 700; font-size: 16px; }
+  .ticket button:disabled { opacity: .5; }
+  #controls { padding: 12px 0 8px; display: flex; flex-direction: column; gap: 10px; }
+  #talk { width: 100%; height: 120px; border-radius: 20px; border: 2px solid var(--accent-2);
+    background: #10221b; color: var(--text); font: inherit; font-size: 20px; font-weight: 700;
+    user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: none; }
+  #talk.rec { background: var(--accent); border-color: var(--accent); color: #062118; }
+  #talk.busy { opacity: .75; }
+  #talk small { display: block; font-weight: 400; font-size: 12px; color: var(--dim); margin-top: 4px; }
+  #talk.rec small { color: #062118; }
+  form { display: flex; gap: 8px; margin: 0; }
+  input[type=text], input[type=password] { flex: 1; min-width: 0; background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; font: inherit; font-size: 16px; }
+  form button { background: var(--accent-2); color: #fff; border: 0; border-radius: 10px; padding: 0 16px; font: inherit; }
+  #meter { height: 4px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  #meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 60ms; }
+  #gate { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center;
+    justify-content: center; padding: 24px; z-index: 5; }
+  #gate .box { width: 100%; max-width: 360px; display: flex; flex-direction: column; gap: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot" id="dot"></span>
+  <h1>Leaps Voice</h1>
+  <span id="status">offline</span>
+</header>
+<div id="models">
+  <select id="m1" aria-label="model"><option value="">model…</option></select>
+  <label><input type="checkbox" id="cmp"> compare</label>
+  <span class="vs" id="vs" hidden>vs</span>
+  <select id="m2" aria-label="second model" hidden></select>
+</div>
+
+<div id="trace"><div class="row filler">Hold the button (or space) and ask about your portfolio.</div></div>
+
+<div id="controls">
+  <div id="meter"><i></i></div>
+  <button id="talk">Hold to talk<small>tap once first to enable audio</small></button>
+  <form id="ask"><input id="q" type="text" placeholder="Or type a question" autocomplete="off" enterkeyhint="send"><button>Ask</button></form>
+</div>
+
+<div id="gate"><div class="box">
+  <h1 style="margin:0;font-size:20px">Passcode</h1>
+  <form id="gateForm"><input id="pass" type="password" placeholder="passcode" autocomplete="current-password"><button>Go</button></form>
+  <div id="gateErr" class="err"></div>
+</div></div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const IN_RATE = 16000;
+
+// ---------- state ----------
+let ws = null, wsReady = false, passcode = null, model = null;
+let models = [], compareOn = false, model2 = null, lanes = null;   // lanes: [el, el] during a compare turn
+let ctx = null;                         // shared AudioContext (capture + playback)
+let micStream = null, micNode = null, micSource = null, sink = null;
+let recording = false, pendingPcm = [], pendingLen = 0;
+let playHead = 0, playing = [];          // gapless playback scheduling
+let turnEl = null, turnStart = 0, reconnectDelay = 500;
+
+try { passcode = new URLSearchParams(location.search).get("k") || localStorage.getItem("voice.k"); } catch (e) {}
+try { model = localStorage.getItem("voice.model"); model2 = localStorage.getItem("voice.model2"); compareOn = localStorage.getItem("voice.compare") === "1"; } catch (e) {}
+
+// ---------- trace ----------
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+function newTurn() {
+  turnEl = el("div", "turn"); $("trace").appendChild(turnEl); scroll(); return turnEl;
+}
+function add(node, lane) {
+  const parent = (lanes && lane != null && lanes[lane]) ? lanes[lane] : (turnEl || newTurn());
+  parent.appendChild(node); scroll(); return node;
+}
+function label(name) { const m = models.find((x) => x.name === name); return m ? m.label : name; }
+function scroll() { const t = $("trace"); t.scrollTop = t.scrollHeight; }
+function fmtObj(o) {
+  const span = el("span");
+  Object.entries(o || {}).forEach(([k, v], i) => {
+    if (i) span.appendChild(document.createTextNode("  "));
+    span.appendChild(document.createTextNode(k + "="));
+    span.appendChild(el("b", null, Array.isArray(v) || typeof v === "object" ? JSON.stringify(v) : String(v)));
+  });
+  return span;
+}
+
+// ---------- websocket ----------
+function connect() {
+  if (!passcode) { showGate(); return; }
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  ws = new WebSocket(`${proto}//${location.host}/ws?k=${encodeURIComponent(passcode)}`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { reconnectDelay = 500; };
+  ws.onclose = (ev) => {
+    wsReady = false; setStatus(false, ev.code === 4401 ? "bad passcode" : ev.code === 4000 ? "replaced" : "offline");
+    if (ev.code === 4401) { try { localStorage.removeItem("voice.k"); } catch (e) {} passcode = null; showGate("Wrong passcode"); return; }
+    if (ev.code === 4000) return;  // another tab/phone took the session; don't fight it
+    setTimeout(connect, reconnectDelay); reconnectDelay = Math.min(reconnectDelay * 2, 8000);
+  };
+  ws.onmessage = (m) => {
+    if (typeof m.data !== "string") { playPcm(m.data); return; }
+    let e; try { e = JSON.parse(m.data); } catch (_) { return; }
+    onEvent(e);
+  };
+}
+function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+function setStatus(on, text) { $("dot").classList.toggle("on", on); $("status").textContent = text; }
+
+function onEvent(e) {
+  switch (e.type) {
+    case "hello": {
+      wsReady = true; setStatus(true, "agent: " + e.agent);
+      try { localStorage.setItem("voice.k", passcode); } catch (_) {}
+      models = e.models || [];
+      const ok = (n) => models.some((m) => m.name === n && m.available);
+      if (!ok(model)) model = e.model;
+      if (!ok(model2)) model2 = (models.find((m) => m.available && m.name !== model) || {}).name || model;
+      fillPickers();
+      if (model !== e.model) send({ type: "set_model", model });
+      if (compareOn) send({ type: "set_compare", models: [model, model2] });
+      break;
+    }
+    case "model": if (e.resolved) { model = e.resolved; fillPickers(); } break;
+    case "compare": break;
+    case "compare_start": {
+      const grid = add(el("div", "cmp"));
+      lanes = (e.models || []).map((m) => { const c = el("div", "lane"); c.appendChild(el("h4", null, label(m))); grid.appendChild(c); return c; });
+      break;
+    }
+    case "lane_done": {
+      const parts = [`agent ${e.agent ?? "-"}ms`, `1st tool ${e.first_tool ?? "-"}ms`];
+      if (e.first_audio != null) parts.push(`1st audio ${e.first_audio}ms`);
+      add(el("div", "tim", parts.join(" · ")), e.lane);
+      break;
+    }
+    case "transcript": {
+      newTurn(); turnStart = performance.now();
+      const q = add(el("div", "row q", e.text ? `“${e.text}”` : "(nothing heard)"));
+      q.appendChild(el("span", "src", e.source === "text" ? "typed" : "heard"));
+      break;
+    }
+    case "tool_call":
+      add(el("div", "row tool", `→ ${e.tool}(${Object.entries(e.args || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ")})`), e.lane);
+      break;
+    case "tool_result": {
+      const r = add(el("div", "row res"), e.lane);
+      if (e.words && Object.keys(e.words).length) { r.appendChild(document.createTextNode("words ")); r.appendChild(fmtObj(e.words)); }
+      if (e.slots_display && Object.keys(e.slots_display).length) {
+        r.appendChild(el("br")); r.appendChild(document.createTextNode("slots ")); r.appendChild(fmtObj(e.slots_display));
+      }
+      if (e.error) r.appendChild(el("div", "err", "error: " + e.error));
+      break;
+    }
+    case "filler": add(el("div", "row filler", e.text), e.lane); break;
+    case "answer": {
+      add(el("div", "row ans", e.display || e.spoken || ""), e.lane);
+      if (e.lane) {   // lanes after the first are silent: play on demand
+        const b = add(el("button", "play", "▶ play this answer"), e.lane);
+        b.onclick = () => { unlockAudio(); stopPlayback(); send({ type: "play_lane", lane: e.lane }); };
+      }
+      break;
+    }
+    case "ticket": addTicket(e, e.lane); break;
+    case "ticket_confirmed":
+      add(el("div", "row filler", `Ticket ${e.ticket_id}: ${e.status}`)); break;
+    case "audio": break;   // header for the next binary frame; frames arrive in order
+    case "error":
+      add(el("div", "row err", e.message || "error"), e.lane);
+      if (/passcode/.test(e.message || "")) showGate("Wrong passcode");
+      break;
+    case "done": {
+      const t = e.timings || {};
+      if (t.replay) { setBusy(false); break; }   // a lane's answer played on demand: no new turn
+      lanes = null;
+      const parts = t.lanes ? [`stt ${t.stt ?? "-"}ms`, `total ${t.total ?? "-"}ms`]
+        : [`stt ${t.stt ?? "-"}ms`, `first audio ${t.first_audio ?? "-"}ms`, `total ${t.total ?? "-"}ms`];
+      if (t.agent != null && !t.lanes) parts.splice(1, 0, `agent ${t.agent}ms`);
+      if (!t.lanes) parts.unshift(label(model));
+      add(el("div", "tim", parts.join(" · ")));
+      setBusy(false); turnEl = null;
+      break;
+    }
+  }
+}
+
+function addTicket(t, lane) {
+  const box = add(el("div", "ticket"), lane);
+  const desc = [t.direction, t.qty, t.symbol, t.side ? `${t.side}${t.strike ? " " + t.strike : ""}${t.expiry_rule ? " (" + t.expiry_rule + ")" : ""}` : "shares", t.order_type || ""]
+    .filter((x) => x !== undefined && x !== "").join(" ").toUpperCase();
+  box.appendChild(el("div", null, `Ticket ${t.ticket_id}: ${desc}`));
+  box.appendChild(el("div", "filler", t.status || "needs confirmation"));
+  const b = el("button", null, "Confirm");
+  b.onclick = () => { unlockAudio(); b.disabled = true; b.textContent = "Confirmed"; setBusy(true); send({ type: "confirm_ticket", ticket_id: t.ticket_id }); };
+  box.appendChild(b);
+}
+
+// ---------- audio: context + unlock ----------
+function ensureCtx() {
+  if (!ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC({ latencyHint: "interactive" });
+  }
+  return ctx;
+}
+function unlockAudio() {
+  const c = ensureCtx();
+  if (c.state !== "running") c.resume();
+  // iOS: playing a silent buffer inside the gesture unlocks output.
+  const b = c.createBuffer(1, 1, 22050), s = c.createBufferSource();
+  s.buffer = b; s.connect(c.destination); s.start(0);
+  $("talk").querySelector("small").textContent = "or hold space";
+}
+function setSession(type) { try { if (navigator.audioSession) navigator.audioSession.type = type; } catch (_) {} }
+
+// ---------- playback (24 kHz PCM16, gapless, in order) ----------
+function playPcm(buf) {
+  const c = ensureCtx();
+  const i16 = new Int16Array(buf), n = i16.length;
+  if (!n) return;
+  const ab = c.createBuffer(1, n, 24000), ch = ab.getChannelData(0);
+  for (let i = 0; i < n; i++) ch[i] = i16[i] / 32768;
+  const src = c.createBufferSource(); src.buffer = ab; src.connect(c.destination);
+  const now = c.currentTime;
+  if (playHead < now + 0.03) playHead = now + 0.05;
+  src.start(playHead); playHead += ab.duration;
+  playing.push(src); src.onended = () => { playing = playing.filter((x) => x !== src); };
+}
+function stopPlayback() { playing.forEach((s) => { try { s.stop(); } catch (_) {} }); playing = []; playHead = 0; }
+
+// ---------- capture (AudioWorklet, ScriptProcessor fallback) ----------
+const WORKLET = `
+class Tap extends AudioWorkletProcessor {
+  process(inputs) { const ch = inputs[0] && inputs[0][0]; if (ch) this.port.postMessage(ch.slice(0)); return true; }
+}
+registerProcessor("tap", Tap);`;
+
+let resampleCarry = 0;  // fractional read position carried across blocks
+function onMicBlock(f32) {
+  // level meter
+  let peak = 0; for (let i = 0; i < f32.length; i += 8) peak = Math.max(peak, Math.abs(f32[i]));
+  $("meter").firstElementChild.style.width = recording ? Math.min(100, peak * 140) + "%" : "0";
+  if (!recording) return;
+  // downsample ctx.sampleRate -> 16 kHz by box-averaging over each output interval
+  const ratio = ctx.sampleRate / IN_RATE;
+  const out = [];
+  let pos = resampleCarry;
+  while (pos + ratio <= f32.length) {
+    const a = Math.floor(pos), b = Math.min(f32.length, Math.floor(pos + ratio));
+    let s = 0; for (let i = a; i < b; i++) s += f32[i];
+    const v = Math.max(-1, Math.min(1, s / Math.max(1, b - a)));
+    out.push(v < 0 ? v * 32768 : v * 32767);
+    pos += ratio;
+  }
+  resampleCarry = pos - f32.length;
+  const i16 = Int16Array.from(out);
+  pendingPcm.push(i16); pendingLen += i16.length;
+  if (pendingLen >= 1600) flushPcm();     // ~100 ms frames
+}
+function flushPcm() {
+  if (!pendingLen) return;
+  const all = new Int16Array(pendingLen); let o = 0;
+  for (const p of pendingPcm) { all.set(p, o); o += p.length; }
+  pendingPcm = []; pendingLen = 0;
+  if (ws && ws.readyState === 1) ws.send(all.buffer);
+}
+
+async function ensureMic() {
+  const c = ensureCtx();
+  if (micStream && micStream.getAudioTracks().some((t) => t.readyState === "live")) return;
+  micStream = await navigator.mediaDevices.getUserMedia({
+    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+  });
+  micSource = c.createMediaStreamSource(micStream);
+  sink = c.createGain(); sink.gain.value = 0; sink.connect(c.destination);   // keep graph pulling, silently
+  if (c.audioWorklet && window.AudioWorkletNode) {
+    try {
+      const url = URL.createObjectURL(new Blob([WORKLET], { type: "application/javascript" }));
+      await c.audioWorklet.addModule(url);
+      micNode = new AudioWorkletNode(c, "tap");
+      micNode.port.onmessage = (ev) => onMicBlock(ev.data);
+      micSource.connect(micNode); micNode.connect(sink);
+      return;
+    } catch (err) { console.warn("AudioWorklet failed, using ScriptProcessor", err); }
+  }
+  micNode = c.createScriptProcessor(2048, 1, 1);
+  micNode.onaudioprocess = (ev) => onMicBlock(ev.inputBuffer.getChannelData(0));
+  micSource.connect(micNode); micNode.connect(sink);
+}
+
+// ---------- hold to talk ----------
+let busy = false, holdId = 0, streaming = false;
+function setBusy(b) { busy = b; $("talk").classList.toggle("busy", b); }
+
+async function startTalk() {
+  if (recording) return;
+  unlockAudio();
+  if (!wsReady) { add(el("div", "row err", "not connected")); return; }
+  stopPlayback();
+  const myHold = ++holdId;
+  recording = true; $("talk").classList.add("rec"); $("talk").firstChild.textContent = "Listening…";
+  setSession("play-and-record");
+  try { await ensureMic(); }
+  catch (err) {
+    recording = false; $("talk").classList.remove("rec"); $("talk").firstChild.textContent = "Hold to talk";
+    add(el("div", "row err", "mic unavailable: " + (err && err.message || err) + (location.protocol !== "https:" && location.hostname !== "localhost" ? " (needs https)" : "")));
+    return;
+  }
+  if (myHold !== holdId || !recording) return;       // released before the mic came up
+  resampleCarry = 0; pendingPcm = []; pendingLen = 0;
+  streaming = true; send({ type: "start" });
+}
+function endTalk() {
+  if (!recording) return;
+  holdId++;
+  // keep ~150 ms of tail so the last word isn't clipped
+  setTimeout(() => {
+    recording = false; flushPcm();
+    $("talk").classList.remove("rec"); $("talk").firstChild.textContent = "Hold to talk";
+    $("meter").firstElementChild.style.width = "0";
+    setSession("playback");
+    if (streaming) { streaming = false; setBusy(true); send({ type: "end" }); }
+  }, 150);
+}
+
+const talk = $("talk");
+talk.addEventListener("pointerdown", (e) => { e.preventDefault(); try { talk.setPointerCapture(e.pointerId); } catch (_) {} startTalk(); });
+talk.addEventListener("pointerup", (e) => { e.preventDefault(); endTalk(); });
+talk.addEventListener("pointercancel", endTalk);
+talk.addEventListener("contextmenu", (e) => e.preventDefault());
+talk.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });   // no iOS long-press callout / zoom
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.repeat && document.activeElement !== $("q") && document.activeElement !== $("pass")) { e.preventDefault(); startTalk(); }
+});
+document.addEventListener("keyup", (e) => {
+  if (e.code === "Space" && document.activeElement !== $("q") && document.activeElement !== $("pass")) { e.preventDefault(); endTalk(); }
+});
+document.addEventListener("touchend", () => { if (!ctx || ctx.state !== "running") unlockAudio(); }, { once: true });
+
+// ---------- typed question + model toggle + passcode ----------
+$("ask").addEventListener("submit", (e) => {
+  e.preventDefault(); unlockAudio();
+  const text = $("q").value.trim(); if (!text) return;
+  stopPlayback(); setBusy(true); send({ type: "text", text }); $("q").value = ""; $("q").blur();
+});
+function fillPickers() {
+  for (const [id, cur] of [["m1", model], ["m2", model2]]) {
+    const s = $(id); s.textContent = "";
+    for (const m of models) {
+      const o = el("option", null, m.label + (m.available ? "" : " (not ready)"));
+      o.value = m.name; o.disabled = !m.available; o.selected = m.name === cur; s.appendChild(o);
+    }
+  }
+  $("cmp").checked = compareOn; $("m2").hidden = $("vs").hidden = !compareOn;
+  try { localStorage.setItem("voice.model", model || ""); localStorage.setItem("voice.model2", model2 || ""); localStorage.setItem("voice.compare", compareOn ? "1" : "0"); } catch (_) {}
+}
+function pushCompare() { send(compareOn ? { type: "set_compare", models: [model, model2] } : { type: "set_compare", models: null }); }
+$("m1").addEventListener("change", () => { model = $("m1").value; send({ type: "set_model", model }); if (compareOn) pushCompare(); fillPickers(); });
+$("m2").addEventListener("change", () => { model2 = $("m2").value; if (compareOn) pushCompare(); fillPickers(); });
+$("cmp").addEventListener("change", () => { compareOn = $("cmp").checked; pushCompare(); fillPickers(); });
+function showGate(msg) { $("gate").style.display = "flex"; $("gateErr").textContent = msg || ""; setTimeout(() => $("pass").focus(), 50); }
+$("gateForm").addEventListener("submit", (e) => {
+  e.preventDefault(); passcode = $("pass").value.trim(); if (!passcode) return;
+  $("gate").style.display = "none"; unlockAudio(); connect();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && (!ws || ws.readyState > 1) && passcode) connect();
+});
+
+connect();
+</script>
+</body>
+</html>
