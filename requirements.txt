@@ -1,0 +1,17 @@
+# Python 3.12 on Apple silicon (MLX). Pinned from the build venv; only packages the code imports.
+mlx==0.32.4
+mlx-lm==0.32.2          # needs the muse_glimmer model type for the Glimmer comparison
+mlx-whisper==0.4.3
+mlx-audio==0.6.2
+numpy==2.5.4
+fastapi==0.162.0
+starlette==1.10.0
+pydantic==2.14.1
+uvicorn==0.54.0
+websockets==17.3
+PyYAML==6.0.3
+# tests
+pytest==9.1.1
+httpx==0.28.1           # fastapi TestClient
+# optional: voice/local_client.py (push-to-talk from the Mac's own mic)
+sounddevice==0.5.6

@@ -1,0 +1,29 @@
+# weights, adapters and local state
+models/
+adapters/
+*.safetensors
+*.gguf
+data/
+sessions/
+.leaps-voice-agent/
+models.json
+# logs
+logs/
+*.log
+turns.jsonl
+# secrets
+.env
+.env.*
+*.passcode
+.passcode
+# local-only notes (not published)
+PRIVACY-SCAN.md
+GO-LIVE.md
+docs/VIDEO-PLAN.md
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+.DS_Store
