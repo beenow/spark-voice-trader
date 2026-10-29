@@ -1,0 +1,23 @@
+# LoRA recipe of the served llama-1b-loop adapter (Llama 3.2 1B Instruct, bf16 base, plain LoRA).
+# Used by training/train_lora.py on data written by training/render.py.
+model: ${VOICE_LLAMA_MODEL}          # e.g. ~/.leaps-voice-agent/models/Llama-3.2-1B-Instruct-bf16
+data: data                           # train.jsonl / valid.jsonl from training/render.py
+adapter_path: adapters/llama-1b-loop
+seed: 0
+epochs: 3                            # iters = epochs * floor(train_examples / batch_size)
+batch_size: 2
+grad_accumulation_steps: 4           # effective batch 8
+grad_checkpoint: true
+max_seq_length: 1152
+num_layers: 16                       # all 16 layers
+lora_parameters:
+  rank: 16
+  scale: 2.0                         # alpha 32 / rank 16
+  dropout: 0.0
+  keys: [self_attn.q_proj, self_attn.k_proj, self_attn.v_proj, self_attn.o_proj, mlp.gate_proj, mlp.up_proj, mlp.down_proj]
+learning_rate: 2.0e-4
+warmup_steps: 50                     # optimizer steps, linear from warmup_init
+warmup_init: 4.0e-6
+min_learning_rate: 2.0e-6            # cosine decay to this
+evals_per_epoch: 4                   # the best-validation checkpoint becomes adapters.safetensors
+steps_per_report: 20

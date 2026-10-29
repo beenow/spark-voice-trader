@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Voice-agent teacher trace",
+  "description": "One teacher run of the agent loop for one question. Every result is the real model_view of a mockmarket tool run (words + slot NAMES, never a number). One JSON object per line in a .jsonl file.",
+  "type": "object",
+  "required": ["id", "question", "steps", "answer"],
+  "properties": {
+    "id": {"type": "string"},
+    "group": {"type": "string", "description": "paraphrases of one question share a group; train/valid splits by group"},
+    "category": {"type": "string", "description": "single_tool, multi_tool, follow_up, order, no_tool_chat, ..."},
+    "teacher": {"type": "string", "description": "e.g. muse-spark-1.3"},
+    "seed": {"type": "integer", "description": "mockmarket.World seed the tools ran on"},
+    "context": {
+      "type": "array", "maxItems": 3,
+      "description": "earlier turns of the conversation, oldest first",
+      "items": {"type": "object", "required": ["question", "spoken"],
+                "properties": {"question": {"type": "string"}, "spoken": {"type": "string"}}}
+    },
+    "state": {
+      "type": "object",
+      "description": "the state line for the current question (only with context): keys of agent.memory.STATE_KEYS",
+      "properties": {"last_symbol": {"type": "string"}, "last_topic": {"type": "string"},
+                     "last_call": {"type": "string"}, "facts": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "question": {"type": "string"},
+    "steps": {
+      "type": "array", "maxItems": 4,
+      "items": {
+        "type": "object", "required": ["call", "result"],
+        "properties": {
+          "call": {"type": "object", "required": ["tool", "arguments"],
+                   "properties": {"tool": {"type": "string"}, "arguments": {"type": "object"}}},
+          "result": {"type": "object", "required": ["tool", "ok", "words", "slots"],
+                     "properties": {"tool": {"type": "string"}, "ok": {"type": "boolean"}, "words": {"type": "object"},
+                                    "slots": {"type": "array", "items": {"type": "string", "pattern": "^\\{[a-z_0-9]+\\}$"}},
+                                    "error": {"type": ["string", "null"]}}},
+          "turn": {"type": "integer", "description": "teacher decision index: steps sharing a turn were parallel calls"}
+        }
+      }
+    },
+    "answer": {"type": "string", "description": "spoken answer template: words + {slots}, at most 2 sentences, no digits"}
+  }
+}

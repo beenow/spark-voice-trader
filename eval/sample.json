@@ -1,0 +1,26 @@
+{
+  "about": "Synthetic eval sample: 20 questions written for this repo against the mock tools (mockmarket seed 7). Gold = the tool calls that answer each question. Not drawn from any real user data.",
+  "seed": 7,
+  "rows": [
+    {"id": "s01", "category": "single_tool", "question": "What's Microsoft trading at?", "gold": [{"tool": "get_quote", "args": {"symbol": "MSFT"}}]},
+    {"id": "s02", "category": "single_tool", "question": "How much am I up on my Apple shares?", "gold": [{"tool": "get_position", "args": {"symbol": "AAPL"}}]},
+    {"id": "s03", "category": "single_tool", "question": "Is AMD overbought on the daily?", "gold": [{"tool": "get_indicators", "args": {"symbol": "AMD", "timeframe": "1D"}}]},
+    {"id": "s04", "category": "single_tool", "question": "Where's support on Palantir?", "gold": [{"tool": "get_levels", "args": {"symbol": "PLTR"}}]},
+    {"id": "s05", "category": "single_tool", "question": "Pull up next week's Tesla puts.", "gold": [{"tool": "get_option_chain", "args": {"symbol": "TSLA", "expiry_rule": "next_week", "side": "put"}}]},
+    {"id": "s06", "category": "single_tool", "question": "Are any of my orders still open?", "gold": [{"tool": "get_orders", "args": {"status": "open"}}]},
+    {"id": "s07", "category": "single_tool", "question": "Anything new in the headlines for Netflix?", "gold": [{"tool": "get_news", "args": {"symbol": "NFLX"}}]},
+    {"id": "s08", "category": "single_tool", "question": "When does Broadcom report earnings?", "gold": [{"tool": "get_fundamentals", "args": {"symbol": "AVGO"}}]},
+    {"id": "s09", "category": "single_tool", "question": "Which stocks on my watchlist look oversold?", "gold": [{"tool": "screen_watchlist", "args": {"condition": "oversold"}}]},
+    {"id": "s10", "category": "single_tool", "question": "What if Amazon falls eight percent, how does my account do?", "gold": [{"tool": "what_if", "args": {"symbol": "AMZN", "move_pct": -8}}]},
+    {"id": "s11", "category": "single_tool", "question": "How's my whole portfolio doing today?", "gold": [{"tool": "get_portfolio", "args": {}}]},
+    {"id": "s12", "category": "single_tool", "question": "Who are the biggest movers in the market right now?", "gold": [{"tool": "get_market", "args": {"focus": "movers"}}]},
+    {"id": "m01", "category": "multi_tool", "question": "How's my Nvidia position and is it close to support?", "gold": [{"tool": "get_position", "args": {"symbol": "NVDA"}}, {"tool": "get_levels", "args": {"symbol": "NVDA"}}]},
+    {"id": "m02", "category": "multi_tool", "question": "Give me Meta's price and its RSI.", "gold": [{"tool": "get_quote", "args": {"symbol": "META"}}, {"tool": "get_indicators", "args": {"symbol": "META", "indicator": "rsi"}}]},
+    {"id": "o01", "category": "order", "question": "Buy five shares of Coinbase.", "gold": [{"tool": "draft_order", "args": {"symbol": "COIN", "direction": "buy", "qty": 5}}]},
+    {"id": "o02", "category": "order", "question": "Sell two Apple calls expiring this week.", "gold": [{"tool": "draft_order", "args": {"symbol": "AAPL", "direction": "sell", "qty": 2, "side": "call", "expiry_rule": "this_week"}}]},
+    {"id": "f01", "category": "follow_up", "context": ["What's Uber at?"], "question": "And its support levels?", "gold": [{"tool": "get_levels", "args": {"symbol": "UBER"}}]},
+    {"id": "n01", "category": "no_tool_chat", "question": "Hi! Hope your day is off to a good start.", "gold": []},
+    {"id": "n02", "category": "no_tool_decline", "question": "Should I put my savings into Tesla?", "gold": []},
+    {"id": "n03", "category": "no_tool_clarify", "question": "How's it looking?", "gold": []}
+  ]
+}
