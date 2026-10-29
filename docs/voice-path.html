@@ -1,0 +1,299 @@
+<title>Voice Agent Speech Path</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a U-shaped signal path (speech in along the top, speech out along the bottom), then a worked example, timing bar and prosody notes. */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --fg: #16191f;
+  --muted: #5b6270;
+  --line: #9aa1ad;
+  --rule: #dfe2e7;
+  --band-phone: #f1ece4;
+  --band-mac: #e9eef6;
+  --accent: #2f5fd0;
+  --accent-soft: #e4ebfb;
+  --voice: #8a3fb0;
+  --voice-soft: #f2e8f8;
+  --seg-stt: #7c8db5;
+  --seg-agent: #2f5fd0;
+  --seg-tts: #8a3fb0;
+  --display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121418; --surface: #1b1e24; --fg: #e8eaee; --muted: #9ba2ae; --line: #6b7280; --rule: #2b2f37;
+    --band-phone: #231f1a; --band-mac: #18202c; --accent: #7aa2ff; --accent-soft: #1f2a44;
+    --voice: #c792ea; --voice-soft: #2a1f33; --seg-stt: #8e9cc4; --seg-agent: #7aa2ff; --seg-tts: #c792ea; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121418; --surface: #1b1e24; --fg: #e8eaee; --muted: #9ba2ae; --line: #6b7280; --rule: #2b2f37;
+  --band-phone: #231f1a; --band-mac: #18202c; --accent: #7aa2ff; --accent-soft: #1f2a44;
+  --voice: #c792ea; --voice-soft: #2a1f33; --seg-stt: #8e9cc4; --seg-agent: #7aa2ff; --seg-tts: #c792ea; color-scheme: dark;
+}
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--body); font-size: 15px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 56px;
+}
+main { max-width: 1000px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: grid; gap: 6px; }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-weight: 600; font-size: clamp(26px, 4vw, 34px); line-height: 1.15; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 600; font-size: 21px; margin: 0; text-wrap: balance; }
+.lead { margin: 0; max-width: 68ch; color: var(--muted); }
+.figure { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; overflow-x: auto; }
+.figure svg { display: block; width: 100%; min-width: 780px; height: auto; }
+svg text { font-family: var(--body); fill: var(--fg); }
+svg .name { font-weight: 600; font-size: 14px; }
+svg .line { font-size: 12px; fill: var(--muted); }
+svg .band-label { font-family: var(--mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; fill: var(--muted); }
+svg .row-label { font-family: var(--mono); font-size: 11px; letter-spacing: .05em; text-transform: uppercase; fill: var(--accent); }
+svg .row-label.out { fill: var(--voice); }
+svg .edge-label { font-size: 11.5px; fill: var(--muted); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.25; }
+svg .box.key { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+svg .box.voice { fill: var(--voice-soft); stroke: var(--voice); stroke-width: 2; }
+svg .band-phone { fill: var(--band-phone); }
+svg .band-mac { fill: var(--band-mac); }
+svg .wire { fill: none; stroke: var(--line); stroke-width: 1.4; }
+svg .arrowhead { fill: var(--line); }
+svg .tag { font-family: var(--mono); font-size: 10px; letter-spacing: .05em; text-transform: uppercase; fill: var(--muted); }
+svg .tag.key { fill: var(--accent); }
+svg .tag.voice { fill: var(--voice); }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 12px 16px; border-top: 1px solid var(--rule); font-size: 13px; color: var(--muted); }
+.legend span { display: inline-flex; align-items: center; gap: 8px; }
+.sw { width: 18px; height: 12px; border-radius: 3px; border: 1.5px solid var(--line); background: var(--surface); }
+.sw.key { border-color: var(--accent); background: var(--accent-soft); }
+.sw.voice { border-color: var(--voice); background: var(--voice-soft); }
+.sw.ph { border: 0; background: var(--band-phone); }
+.sw.mac { border: 0; background: var(--band-mac); }
+section { display: grid; gap: 12px; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 16px; display: grid; gap: 14px; min-width: 0; }
+.trace { display: grid; gap: 10px; }
+.trace-row { display: grid; grid-template-columns: 9.5em 1fr; gap: 4px 14px; align-items: baseline; }
+.trace-row .k { font-family: var(--mono); font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.trace-row .v { min-width: 0; overflow-wrap: anywhere; }
+.trace-row .v code { font-family: var(--mono); font-size: 13px; }
+.slot { color: var(--accent); font-family: var(--mono); font-size: 13px; }
+.said { color: var(--voice); font-weight: 500; }
+@media (max-width: 560px) { .trace-row { grid-template-columns: 1fr; } }
+.bar { display: flex; height: 30px; border-radius: 6px; overflow: hidden; border: 1px solid var(--rule); }
+.bar div { display: flex; align-items: center; padding: 0 8px; color: #fff; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
+.bar .stt { background: var(--seg-stt); }
+.bar .agent { background: var(--seg-agent); }
+.bar .tts { background: var(--seg-tts); }
+.bar-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; color: var(--muted); }
+.bar-legend span { display: inline-flex; gap: 8px; align-items: center; }
+.bar-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 620px; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--mono); font-weight: 500; font-size: 11.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+td code { font-family: var(--mono); font-size: 13px; }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.note { background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px; display: grid; gap: 6px; min-width: 0; align-content: start; }
+.note h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.note p, .note li { margin: 0; color: var(--muted); font-size: 14px; }
+.note ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+</style>
+
+<main>
+  <header>
+    <div class="eyebrow">Leapsify Voice Agent · speech path · runs locally on the Mac Studio</div>
+    <h1>From your voice to a spoken answer</h1>
+    <p class="lead">You hold to talk on the phone or through the glasses. The audio goes to the Mac Studio, Whisper turns it into text, the agent picks tools and writes an answer with placeholders, code turns every number into natural spoken words, and Kokoro speaks it back sentence by sentence. No cloud model is in the loop.</p>
+  </header>
+
+  <div class="figure">
+    <svg viewBox="0 0 970 430" role="img" aria-labelledby="vp-title">
+      <title id="vp-title">Speech path: microphone, speech gate, Whisper, agent loop, answer template, spoken renderer, Kokoro and playback</title>
+      <defs>
+        <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+
+      <rect class="band-phone" x="15" y="20" width="230" height="395" rx="8"/>
+      <text class="band-label" x="27" y="38">Phone · glasses</text>
+      <rect class="band-mac" x="255" y="20" width="700" height="395" rx="8"/>
+      <text class="band-label" x="267" y="38">Mac Studio · local</text>
+
+      <text class="row-label" x="267" y="64">Speech in</text>
+      <text class="row-label out" x="267" y="258">Speech out</text>
+
+      <!-- top row -->
+      <rect class="box" x="30" y="76" width="200" height="104" rx="7"/>
+      <text class="name" x="44" y="100">1 · Hold to talk</text>
+      <text class="line" x="44" y="120">echo cancel, noise suppress,</text>
+      <text class="line" x="44" y="136">auto gain on the mic</text>
+      <text class="line" x="44" y="152">downsampled to 16 kHz</text>
+      <text class="line" x="44" y="168">glasses = BT headset</text>
+
+      <rect class="box" x="265" y="76" width="200" height="104" rx="7"/>
+      <text class="name" x="279" y="100">2 · Speech gate</text>
+      <text class="line" x="279" y="120">drops taps under 0.3 s</text>
+      <text class="line" x="279" y="136">drops near-silence, where</text>
+      <text class="line" x="279" y="152">Whisper invents "Thank you."</text>
+
+      <rect class="box key" x="500" y="76" width="200" height="104" rx="7"/>
+      <text class="tag key" x="514" y="94">Speech to text · ~0.3 s</text>
+      <text class="name" x="514" y="114">3 · Whisper turbo (MLX)</text>
+      <text class="line" x="514" y="134">English, greedy first</text>
+      <text class="line" x="514" y="150">trading vocabulary prompt:</text>
+      <text class="line" x="514" y="166">tickers, RSI, strike, puts</text>
+
+      <rect class="box key" x="735" y="76" width="200" height="104" rx="7"/>
+      <text class="tag key" x="749" y="94">Agent loop</text>
+      <text class="name" x="749" y="114">4 · Llama 3.2 1B</text>
+      <text class="line" x="749" y="134">picks tools, code checks them</text>
+      <text class="line" x="749" y="150">first call starts a filler:</text>
+      <text class="line" x="749" y="166">"Checking the Tesla chart."</text>
+
+      <!-- bottom row -->
+      <rect class="box" x="735" y="270" width="200" height="104" rx="7"/>
+      <text class="name" x="749" y="294">5 · Answer template</text>
+      <text class="line" x="749" y="314">words + {slots}, max 2</text>
+      <text class="line" x="749" y="330">sentences; checked: real</text>
+      <text class="line" x="749" y="346">slots, strike before bid/ask,</text>
+      <text class="line" x="749" y="362">no digits from the model</text>
+
+      <rect class="box voice" x="500" y="270" width="200" height="104" rx="7"/>
+      <text class="tag voice" x="514" y="288">Natural language</text>
+      <text class="name" x="514" y="308">6 · Spoken renderer</text>
+      <text class="line" x="514" y="328">numbers become words</text>
+      <text class="line" x="514" y="344">rounded with "about"</text>
+      <text class="line" x="514" y="360">"up 6.2%" not "+6.2%"</text>
+
+      <rect class="box voice" x="265" y="270" width="200" height="104" rx="7"/>
+      <text class="tag voice" x="279" y="288">Text to speech · prosody</text>
+      <text class="name" x="279" y="308">7 · Kokoro-82M (MLX)</text>
+      <text class="line" x="279" y="328">voice af_heart, speed 1.05</text>
+      <text class="line" x="279" y="344">one sentence at a time</text>
+      <text class="line" x="279" y="360">first sentence plays early</text>
+
+      <rect class="box" x="30" y="270" width="200" height="104" rx="7"/>
+      <text class="name" x="44" y="294">8 · Playback</text>
+      <text class="line" x="44" y="314">24 kHz audio queued</text>
+      <text class="line" x="44" y="330">gapless, in order</text>
+      <text class="line" x="44" y="346">trace + answer on screen</text>
+      <text class="line" x="44" y="362">glasses speakers</text>
+
+      <!-- edges -->
+      <path class="wire" d="M230,128 L263,128" marker-end="url(#ah)"/>
+      <text class="edge-label" x="247" y="200" text-anchor="middle">WebSocket</text>
+      <path class="wire" d="M465,128 L498,128" marker-end="url(#ah)"/>
+      <path class="wire" d="M700,128 L733,128" marker-end="url(#ah)"/>
+      <text class="edge-label" x="717" y="200" text-anchor="middle">transcript</text>
+      <path class="wire" d="M835,180 L835,268" marker-end="url(#ah)"/>
+      <text class="edge-label" x="843" y="230">tool results → answer</text>
+      <path class="wire" d="M735,322 L702,322" marker-end="url(#ah)"/>
+      <path class="wire" d="M500,322 L467,322" marker-end="url(#ah)"/>
+      <path class="wire" d="M265,322 L232,322" marker-end="url(#ah)"/>
+      <text class="edge-label" x="600" y="396" text-anchor="middle">code fills the real values</text>
+      <text class="edge-label" x="247" y="396" text-anchor="middle">PCM chunks</text>
+    </svg>
+    <div class="legend">
+      <span><i class="sw ph"></i>On the phone</span>
+      <span><i class="sw mac"></i>On the Mac Studio</span>
+      <span><i class="sw key"></i>Models that listen and decide</span>
+      <span><i class="sw voice"></i>Natural language and prosody</span>
+    </div>
+  </div>
+
+  <section>
+    <h2>One real turn, end to end</h2>
+    <div class="panel trace">
+      <div class="trace-row"><div class="k">You said</div><div class="v">"Give me more detail technical on APP."</div></div>
+      <div class="trace-row"><div class="k">Whisper</div><div class="v">Transcript in 0.29 s</div></div>
+      <div class="trace-row"><div class="k">Tool call</div><div class="v"><code>get_indicators(symbol="APP", timeframe="1D")</code></div></div>
+      <div class="trace-row"><div class="k">Filler</div><div class="v"><span class="said">"Checking the AppLovin chart."</span> starts playing while the model writes the answer</div></div>
+      <div class="trace-row"><div class="k">Tool result</div><div class="v">words: overbought, above twenty-one EMA, normal volume · slots: <span class="slot">{rsi}</span> 85.8, <span class="slot">{ema21}</span> $536.65, <span class="slot">{vol_ratio}</span> 1.0x</div></div>
+      <div class="trace-row"><div class="k">Template</div><div class="v">AppLovin is overbought with RSI at <span class="slot">{rsi}</span>, above its twenty-one day average at <span class="slot">{ema21}</span> on normal volume.</div></div>
+      <div class="trace-row"><div class="k">Spoken</div><div class="v"><span class="said">"AppLovin is overbought with RSI at eighty-six, above its twenty-one day average at about five thirty-seven on normal volume."</span></div></div>
+      <div class="trace-row"><div class="k">On screen</div><div class="v">RSI 85.8 · 21 EMA $536.65</div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Where the time goes</h2>
+    <div class="panel">
+      <div class="bar" role="img" aria-label="Llama 1B turn: 0.3 s speech to text, 1.48 s agent, 0.71 s speech and network, 2.49 s total">
+        <div class="stt" style="flex: 0.30">STT</div>
+        <div class="agent" style="flex: 1.48">Agent + tools 1.48 s</div>
+        <div class="tts" style="flex: 0.71">Voice 0.71 s</div>
+      </div>
+      <div class="bar-legend">
+        <span><i style="background: var(--seg-stt)"></i>Whisper ~0.3 s</span>
+        <span><i style="background: var(--seg-agent)"></i>Llama 1B with tool calls</span>
+        <span><i style="background: var(--seg-tts)"></i>Rest: first sentence of speech plus network</span>
+        <span>Your TSLA RSI + levels question: 2.49 s total. Glimmer took 3 to 10 s for the same kind of turn.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How numbers become natural speech</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Kind of value</th><th>Screen</th><th>Spoken</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td>Price</td><td><code>$536.65</code></td><td>"about five thirty-seven"</td><td>rounded the way traders say prices, "about" when rounded</td></tr>
+          <tr><td>Signed move</td><td><code>+6.2%</code></td><td>"up six point two percent"</td><td>direction as a word, one decimal</td></tr>
+          <tr><td>Money</td><td><code>$12,480</code></td><td>"about twelve thousand dollars"</td><td>no cents on large amounts</td></tr>
+          <tr><td>RSI</td><td><code>85.8</code></td><td>"eighty-six"</td><td>whole number</td></tr>
+          <tr><td>Delta</td><td><code>0.59</code></td><td>"point five nine"</td><td>no leading "zero"</td></tr>
+          <tr><td>Implied vol</td><td><code>58.4%</code></td><td>"fifty-eight percent"</td><td>whole percent</td></tr>
+          <tr><td>Volume ratio</td><td><code>1.0x</code></td><td>"about average"</td><td>a phrase instead of "one times"</td></tr>
+          <tr><td>Date</td><td><code>Nov 6</code></td><td>"November sixth"</td><td>ordinal day</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="cols">
+    <div class="note">
+      <h3>What shapes the prosody today</h3>
+      <ul>
+        <li>Kokoro's af_heart voice brings its own learned rhythm and intonation.</li>
+        <li>Sentence splits set the pauses; very short fragments merge into the next sentence so speech doesn't stutter.</li>
+        <li>Answers stay at two short sentences, so the stress falls on the one fact asked for.</li>
+        <li>Numbers in words, with "about", sound like a person reading a screen, not a table.</li>
+        <li>Speed 1.05 keeps it brisk without rushing figures.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>Why it feels fast</h3>
+      <ul>
+        <li>The filler line plays while the model is still deciding.</li>
+        <li>Speech is made one sentence at a time, so you hear the first one before the second is synthesised.</li>
+        <li>Whisper, the agent and Kokoro stay loaded and warm; the model's prompt is cached.</li>
+      </ul>
+    </div>
+    <div class="note">
+      <h3>Not done yet</h3>
+      <ul>
+        <li>No emphasis or pitch control per word; Kokoro takes plain text.</li>
+        <li>Clarifying questions don't get a rising question tone on purpose; they rely on the "?".</li>
+        <li>No barge-in: you can't interrupt the answer by speaking.</li>
+        <li>The glasses haven't been tested end to end yet.</li>
+      </ul>
+    </div>
+  </div>
+
+  <section>
+    <h2>Conversation memory</h2>
+    <p>Each turn leaves a small record written by code, not by the model: the calls that ran, the company, the option side, expiry and strikes, and what was said. Follow-ups are answered against that record.</p>
+    <ul>
+      <li><strong>"And the puts?" "What about next week?"</strong> The model picks what changed. Code carries the rest (same company, same expiry) from the last chain.</li>
+      <li><strong>"Buy two of those." "The second strike."</strong> Code fills in the strike the last answer named, or that row of the chain. With no quantity it asks how many and drafts nothing.</li>
+      <li><strong>Fresh numbers are reused.</strong> Asking again within a minute (longer for news and fundamentals) answers from the result you just heard. "Say that again" replays the last answer without the model.</li>
+      <li><strong>It survives a reconnect.</strong> The last few turns and anything you asked it to remember ("call me Minh") are kept on the Mac for a day. "Start over" or "forget that" clears them.</li>
+    </ul>
+    <p>Details: <code>docs/memory.md</code>.</p>
+  </section>
+</main>
