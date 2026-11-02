@@ -158,6 +158,17 @@ def repair_args(tool: str, args, question: str, world) -> tuple:
     return args, fixed
 
 
+def ticket_problems(text: str, ticket: dict) -> list[str]:
+    """The answer must describe the ticket that was drafted: shares vs options, and the option side."""
+    said = {sd for w, sd in (("call", "call"), ("put", "put")) if re.search(rf"\b{w}s?\b", text, re.I)}
+    if ticket.get("kind") == "stock" and said:
+        return ["the ticket is for shares, not options: don't say calls or puts"]
+    side = ticket.get("side")
+    if ticket.get("kind") == "option" and side and said - {side}:
+        return [f"the ticket is for {side}s, not {(said - {side}).pop()}s"]
+    return []
+
+
 def chain_line(book: SlotBook, world, prefer: str | None = None, fields: set[str] | None = None) -> str | None:
     """Code-built option-chain answer that names the strike first, or None if no chain ran.
     `prefer`: a row slot name from the model's answer (its row is used), else the most-open-interest row.
@@ -294,6 +305,24 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
                 # follow-ups: fill what the model left implicit (symbol / side / expiry / "the second strike")
                 exec_args, filled = resolve_followup(tname, raw_args, question, history)
                 exec_args, fixed = repair_args(tname, exec_args, question, world)
+                if tname == "draft_order" and isinstance(exec_args, dict) and "side" not in exec_args and history:
+                    # "buy some Nvidia calls" -> (asked how many) -> "two": the side was said one turn back
+                    prev = (getattr(history[-1], "frame", None) or {})
+                    pq = str(prev.get("question") or "")
+                    sides = {sd for w, sd in (("call", "call"), ("put", "put")) if re.search(rf"\b{w}s?\b", pq, re.I)}
+                    if not prev.get("calls") and len(sides) == 1 and not re.search(r"\bshares?\b", question, re.I):
+                        exec_args = dict(exec_args, side=sides.pop())
+                        fixed = list(fixed) + ["side"]
+                if isinstance(exec_args, dict) and exec_args.get("symbol") and history:
+                    # a bare answer to our own question ("five"): the company is the one named one turn back,
+                    # not an older ticker carried in the frame
+                    prev = (getattr(history[-1], "frame", None) or {})
+                    if not prev.get("calls") and not named_companies(question, world) and not tickers_in(question, world):
+                        pq = str(prev.get("question") or "")
+                        named = {sym for sym, _, _ in named_companies(pq, world) + tickers_in(pq, world)}
+                        if len(named) == 1 and exec_args["symbol"] not in named:
+                            exec_args = dict(exec_args, symbol=named.pop())
+                            fixed = list(fixed) + ["symbol"]
                 filled = filled + ["said:" + k for k in fixed]
                 chk = validate_call(world, c.get("tool") or c.get("name"), exec_args)
                 if chk.name == "draft_order" and (chk.error == "missing qty" or (chk.ok and repairs_on() and qty_is_strike(chk.args, question))):
@@ -385,6 +414,8 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
         problems = check_answer(text, book.names(), draft_ran=ticket is not None)
         if not problems:
             problems = binding_problems(text, book, world)
+        if not problems and ticket is not None:
+            problems = ticket_problems(text, ticket)
         if problems:
             last_problems, last_text = problems, text
             emit({"type": "error", "recoverable": True, "stage": "answer", "message": "; ".join(problems)})

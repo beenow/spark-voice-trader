@@ -107,6 +107,8 @@ def fill(template: str, book: SlotBook, mode: str) -> str:
         return book.display(m.group(1)) if mode == "display" else book.spoken(m.group(1))
     t = re.sub(r"\$\s*(\{[A-Za-z_][A-Za-z0-9_]*\})", r"\1", label_chain(template))
     t = re.sub(r"(\{[A-Za-z_][A-Za-z0-9_]*\})\s*(%|percent\b)", r"\1", t)
+    # age slots already end in "ago" ("two hours ago"): drop a template's own "ago" after them
+    t = re.sub(r"(\{age_\d+(?:_\d+)?\})\s+ago\b", r"\1", t)
     return SLOT_RE.sub(sub, t)
 
 

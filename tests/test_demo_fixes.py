@@ -228,3 +228,20 @@ def test_failed_tool_then_ungrounded_is_not_a_clarify():
     res, _ = run([{"tool_calls": [{"tool": "get_indicators", "args": {"symbol": "AAPL", "indicator": "macd"}}]},
                   {"answer": "Apple RSI is {rsi}."}, {"answer": "Apple RSI is {rsi}."}], "Apple technicals")
     assert res.fallback and res.answer_template != CLARIFY_UNGROUNDED
+
+
+def test_ticket_answer_must_match_ticket_kind_and_side():
+    from agent.loop import ticket_problems
+    assert ticket_problems("I've drafted five Apple call tickets.", {"kind": "stock"})
+    assert not ticket_problems("I've drafted five Apple shares.", {"kind": "stock"})
+    assert not ticket_problems("Two Nvidia call contracts drafted.", {"kind": "option", "side": "call"})
+    assert ticket_problems("Two Nvidia puts drafted.", {"kind": "option", "side": "call"})
+
+
+def test_age_slot_does_not_repeat_ago():
+    from agent.slots import fill
+
+    class Book:
+        def display(self, n): return "2h ago"
+        def spoken(self, n): return "two hours ago"
+    assert fill("A story from {age_1} ago.", Book(), "spoken") == "A story from two hours ago."
