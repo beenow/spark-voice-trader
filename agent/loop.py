@@ -143,7 +143,10 @@ def repair_args(tool: str, args, question: str, world) -> tuple:
     if "symbol" in props:
         sym = str(args.get("symbol") or "").upper().lstrip("$").strip()
         known = bool(sym) and (world.has(sym) or (tool == "what_if" and sym == "ALL"))
-        if not known:
+        if known and tool == "what_if" and sym != "ALL" and _BOOK.search(question) \
+                and not (named_companies(question, world) or tickers_in(question, world)):
+            args["symbol"], fixed = "ALL", fixed + ["symbol"]      # "if the market drops": the whole book
+        elif not known:
             named = sorted({x[0] for x in named_companies(question, world) + tickers_in(question, world)})
             if tool == "what_if" and not named and _BOOK.search(question):
                 args["symbol"], fixed = "ALL", fixed + ["symbol"]
@@ -310,10 +313,11 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
                     prev = (getattr(history[-1], "frame", None) or {})
                     pq = str(prev.get("question") or "")
                     sides = {sd for w, sd in (("call", "call"), ("put", "put")) if re.search(rf"\b{w}s?\b", pq, re.I)}
-                    if not prev.get("calls") and len(sides) == 1 and not re.search(r"\bshares?\b", question, re.I):
+                    bare = not (named_companies(question, world) or tickers_in(question, world))
+                    if bare and not prev.get("calls") and len(sides) == 1 and not re.search(r"\bshares?\b", question, re.I):
                         exec_args = dict(exec_args, side=sides.pop())
                         fixed = list(fixed) + ["side"]
-                if isinstance(exec_args, dict) and exec_args.get("symbol") and history:
+                if isinstance(exec_args, dict) and exec_args.get("symbol") not in (None, "", "ALL") and history:
                     # a bare answer to our own question ("five"): the company is the one named one turn back,
                     # not an older ticker carried in the frame
                     prev = (getattr(history[-1], "frame", None) or {})

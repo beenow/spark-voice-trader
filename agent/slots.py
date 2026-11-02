@@ -120,7 +120,10 @@ def speakable(text: str, world) -> str:
         return t.name if t and len(s) >= 2 and s not in ("OR",) else s
     text = re.sub(r"\b[A-Z]{2,5}\b", sub, text)
     # "up {change_pct}" renders as "up down two percent": keep the value's own direction word
-    return re.sub(r"\b(?:up|down)\s+(up|down)\b", r"\1", text, flags=re.I)
+    text = re.sub(r"\b(?:up|down)\s+(up|down)\b", r"\1", text, flags=re.I)
+    # "a loss of down about three thousand dollars": the noun already carries the direction
+    return re.sub(r"\b(loss|drop|decline|hit|gain|rise|increase)\s+of\s+(?:up|down|minus|plus)\s+", r"\1 of ", text,
+                  flags=re.I)
 
 
 _FILLER = {
