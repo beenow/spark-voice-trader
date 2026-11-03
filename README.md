@@ -80,6 +80,20 @@ The same trained Llama 3.2 1B also runs **on the phone**. `android/` is a Kotlin
 
 See [android/README.md](android/README.md) for the build and what runs where.
 
+## In production (Leapsify)
+
+This agent is the prototype for the assistant in the [Leapsify](https://leapsify.com) trading app. The production
+version uses the same design: a small on-device Llama student, a closed tool-calling loop, slot-filled answers and
+code checks. It runs over a private catalogue of about 50 real tools, covering quotes, option chains, indicators
+and levels, news, fundamentals, portfolio and positions, orders, watchlists, alerts and in-app navigation.
+
+- **Account tools run only on the phone.** Positions, orders and balances never leave the device or reach a server.
+- **Market data tools run on the server.**
+- **Orders are always tickets.** The user confirms each one on screen; voice never places a trade.
+
+The production tools, their schemas and their training data are private. The 14 tools in this repo are a public
+stand-in over a simulated market, so anyone can run and evaluate the agent end to end without a brokerage account.
+
 ## Meta models used
 
 | role | model | how |
