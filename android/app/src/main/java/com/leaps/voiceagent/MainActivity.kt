@@ -101,8 +101,8 @@ class MainActivity : Activity() {
             if (x.containsKey("tts_xnn")) e.putBoolean("tts_xnn", x.getBoolean("tts_xnn"))
             if (x.containsKey("tts_spin")) e.putBoolean("tts_spin", x.getBoolean("tts_spin"))
             if (x.containsKey("tts_xnn_threads")) e.putInt("tts_xnn_threads", x.getInt("tts_xnn_threads"))
-            if (x.containsKey("model")) e.putString("model", x.getString("model"))
-            if (x.containsKey("stt_partial_ms")) e.putInt("stt_partial_ms", x.getInt("stt_partial_ms"))   // e.g. Q8_0 or Q4_K_M
+            if (x.containsKey("model")) e.putString("model", x.getString("model"))   // part of a GGUF name
+            if (x.containsKey("stt_partial_ms")) e.putInt("stt_partial_ms", x.getInt("stt_partial_ms"))
             e.apply()
         }
         threads = prefs.getInt("threads", 6)   // Fold bench: 6 > 4 for prefill; 8 collapses under load
@@ -532,6 +532,7 @@ class MainActivity : Activity() {
         listening = true
         listenDone = false
         lastPartial = null
+        pressId++
         listenStart = SystemClock.elapsedRealtime()
         r.startListening(recognizerIntent())
     }
@@ -541,6 +542,7 @@ class MainActivity : Activity() {
     @Volatile private var sttFinalLast = -1L
 
     @Volatile private var lastPartial: String? = null
+    @Volatile private var pressId = 0
     @Volatile private var listenDone = true
     @Volatile private var turnReleaseAt = 0L
 
@@ -550,7 +552,10 @@ class MainActivity : Activity() {
         recognizer?.stopListening()
         // If the final result is slow, go with the last partial (0 = always wait for the final).
         val wait = prefs.getInt("stt_partial_ms", 600).toLong()
-        if (wait > 0) main.postDelayed({ if (!listenDone && !lastPartial.isNullOrBlank()) finishListening(lastPartial, "partial") }, wait)
+        val press = pressId                 // a later press must not be finished by this press's timer
+        if (wait > 0) main.postDelayed({
+            if (press == pressId && !listenDone && !lastPartial.isNullOrBlank()) finishListening(lastPartial, "partial")
+        }, wait)
     }
 
     /** One result per press: the final result, or the last partial when the final is late (see stopListening). */
@@ -640,7 +645,7 @@ class MainActivity : Activity() {
         val rate = java.nio.ByteBuffer.wrap(bytes, 24, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
         val pipe = android.os.ParcelFileDescriptor.createPipe()
         speaker.stop()
-        listening = true; listenDone = false; lastPartial = null
+        listening = true; listenDone = false; lastPartial = null; pressId++
         listenStart = SystemClock.elapsedRealtime()
         r.startListening(recognizerIntent().apply {
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])

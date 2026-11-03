@@ -33,8 +33,8 @@ class DebugAskReceiver : BroadcastReceiver() {
 }
 
 /**
- * DEBUG BUILDS ONLY. A spoken turn without a person: plays files/<wav> through the speaker while the recognizer
- * listens, and "releases" the button when playback ends.
+ * DEBUG BUILDS ONLY. A spoken turn without a person: streams files/<wav> (16 kHz, 16-bit mono PCM) into the
+ * on-device recognizer in real time (EXTRA_AUDIO_SOURCE), and "releases" the button at the end of the file.
  *   adb shell am broadcast -n com.leaps.voiceagent/.DebugSpeakReceiver --es wav q1.wav
  */
 class DebugSpeakReceiver : BroadcastReceiver() {
