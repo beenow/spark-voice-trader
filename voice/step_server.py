@@ -200,6 +200,16 @@ class Session:
         events, self.events = self.events, []
         events = [_plain(e) for e in events]
         if "prompt" in item:
+            hint, self.last_hint = getattr(self, "last_hint", None), None
+            if hint and len(self.backend.stats) == 0:      # first step of a turn: how much of the hint held
+                toks = item["tokens"]
+                i = next((k for k, (a, b) in enumerate(zip(hint, toks)) if a != b), min(len(hint), len(toks)))
+                if i < len(hint) - 1:
+                    tok = self.pb.tok
+                    log.info("next_prefix miss at %d/%d: hint %r | prompt %r", i, len(hint),
+                             tok.decode(hint[max(0, i - 8):i + 24]), tok.decode(toks[max(0, i - 8):i + 24]))
+                else:
+                    log.info("next_prefix hit: %d/%d tokens", i, len(toks))
             return {"prompt": item["prompt"], "tokens": item["tokens"], "max_tokens": MAX_TOKENS,
                     "answer_max_tokens": ANSWER_MAX_TOKENS, "step": len(self.backend.stats) + 1, "events": events}
         if "error" in item:
@@ -210,7 +220,33 @@ class Session:
                 "tool_calls": _plain(res.tool_calls), "fallback": bool(res.fallback), "events": events,
                 "timings": {"mac_total_s": round(item["total_s"], 3),
                             "tools_s": [round(x, 4) for x in tm.get("tools") or []],
-                            "decides": self.backend.stats if self.backend else []}}
+                            "decides": self.backend.stats if self.backend else []},
+                "next_prefix": self._hint()}
+
+    def _hint(self) -> list[int]:
+        self.last_hint = self.next_prefix()
+        return self.last_hint
+
+    def next_prefix(self) -> list[int]:
+        """Tokens the NEXT turn's first prompt will very likely start with: the system+tools prefix, the history
+        window as it will be rendered (spoken answers, not what the phone generated), and the new user header
+        and state line, cut just before the question. The phone prefills them while the answer plays, so the
+        next turn only prefills its question. A hint only: the phone reuses whatever prefix actually matches."""
+        try:
+            from tools import schema
+            from agent.format import llama_prefix_text
+            from agent.loop import build_messages
+            mark = "\u2063QQ\u2063"
+            msgs = build_messages(mark, self.conv.history, facts=list(self.conv.facts), frame_line=self.frame_line)
+            tools = schema()
+            full = render_llama(msgs, tools, add_generation_prompt=True)
+            pre, cut = llama_prefix_text(tools), full.rfind(mark)
+            if cut <= 0 or not full.startswith(pre):
+                return []
+            return self.pb.prefix_tokens(tools) + self.pb.encode(full[len(pre):cut])
+        except Exception:  # noqa: BLE001
+            log.exception("next_prefix failed")
+            return []
 
 
 def _plain(v: Any) -> Any:

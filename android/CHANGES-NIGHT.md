@@ -70,6 +70,31 @@ Not done:
 | 20 | STT quality (logged only): the owner's first spoken turn was heard as "Can you help me with life". No change made | - | - |
 | 21 | Glasses (Bluetooth headset) support, see README "Glasses". Tested on the phone mic only: the AudioRecord -> PCM pipe -> on-device recognizer path, and the media-button tap (KEYCODE_MEDIA_PLAY_PAUSE / HEADSETHOOK) that starts and stops listening. NOT tested with the glasses: the SCO/LE link time, routing and touchpad events need the owner | - | phone-mic capture path: release->first audio 1.62 s |
 
+## Fourth pass, about 23:15–23:40: prefill inside the app
+
+| # | Change | Before | After |
+|---|---|---|---|
+| 22 | Measured the shim itself: an in-app bench (`DebugBenchReceiver`, pp256 + tg from an empty cache) against llama-bench, same Q5_K_S file and phone, 6 threads | llama-bench pp256 256 tok/s, tg32 56–59 tok/s | in-app pp256 284–288, tg 67–69 when cool. The shim is not slower: n_batch/n_ubatch 512, one llama_decode per span, n_threads_batch 6, flash-attn and KV types at their defaults. Back to back, the phone throttles fast (237 -> 155 -> 115 tok/s over three runs 6 s apart): heat and the amount of prefill are the cost |
+| 23 | The KV was not restored from the snapshot each turn: the live cache is kept and its longest common prefix reused. Reuse stopped at 581 because the step server renders history differently from what the phone generated (spoken answers instead of templates, and a 3-turn window that slides). Fix: with each answer, :8310 now returns `next_prefix`, the next turn's prompt up to the question. The app prefills it in 64-token pieces once Kokoro has rendered the answer, while the audio plays. A new question cancels it between pieces, and a stale hint is skipped. This is a cache hint only; what the model sees is unchanged (test: `test_next_prefix_is_next_turn_prefix`; server log "next_prefix hit/miss") | video script, step-1 prefill 100–216 tokens, 1.0–2.8 s | 9–17 tokens, 0.1–0.28 s; the server logged a hit on all 10 follow-ups |
+| 24 | Kokoro vs llama overlap: a typed/soak turn waits for the previous speech; a spoken turn stops Kokoro at once (speaker.stop()), and the speculative prefill runs only after synthesis has finished | - | no overlap left to remove |
+
+Video script (Q5_K_S, muted, phone at 54–57 °C, i.e. throttled):
+
+| Turn | Before (23:15) turn / to audio | After (23:33) turn / to audio |
+|---|---|---|
+| What about its RSI? | 3230 / 4367 ms | 2272 / 3441 ms |
+| Show me next week's Tesla calls. | 5375 / 6608 | 4684 / 5907 |
+| And the puts? | 6152 / 7525 | 5074 / 6546 |
+| Buy two of the second strike. | 5892 / 9026 | 3099 / 5375 |
+| What's driving Oracle today? | 4499 / 5469 | 2747 / 3585 |
+| Which names on my watchlist are overbought? | 4565 / 6248 | 3060 / 4912 |
+| What happens to my account if the market drops ten percent? | 4400 / 5233 | 2781 / 3756 |
+| Buy three shares of Apple. | 4015 / 5275 | 2519 / 3875 |
+
+What is left is heat: at 55 °C the phone decodes at 25–35 tok/s (68 when cool) and prefills tool results at
+~110 tok/s (an options chain is 225 tokens, ~2 s). A cool phone (off the wireless charger, out of the case) is
+worth more than any remaining code change. On a cooler phone, "What about its RSI?" took 1.29 s.
+
 ## Note on later timings
 
 After about 20:15 the phone was at 24% battery on a wireless charger. The same question then took 1.7 s per turn

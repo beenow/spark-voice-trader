@@ -109,7 +109,7 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
      * to the first sample reaching the speaker and which voice produced it ("kokoro" / "system").
      */
     fun speak(text: String, flush: Boolean, mute: Boolean = false, onFirstAudio: ((Long, String) -> Unit)? = null,
-              onSentence: ((String) -> Unit)? = null, onDone: (() -> Unit)? = null) {
+              onSentence: ((String) -> Unit)? = null, onDone: (() -> Unit)? = null, onSynthDone: (() -> Unit)? = null) {
         if (text.isBlank()) return
         if (flush) stop()
         val gen = generation.get()
@@ -130,6 +130,7 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
                     else -> queue.put(Item.System(gen, unit, first(voice)))
                 }
             }
+            onSynthDone?.invoke()                // all units rendered: the CPU is free while the audio plays
             if (mute) onDone?.invoke() else queue.put(Item.End(gen, onDone))
         }
     }

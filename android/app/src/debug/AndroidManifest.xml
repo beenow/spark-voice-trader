@@ -4,5 +4,6 @@
     <application>
         <receiver android:name=".DebugAskReceiver" android:exported="true" />
         <receiver android:name=".DebugSpeakReceiver" android:exported="true" />
+        <receiver android:name=".DebugBenchReceiver" android:exported="true" />
     </application>
 </manifest>

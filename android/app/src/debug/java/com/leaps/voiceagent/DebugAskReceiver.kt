@@ -43,3 +43,10 @@ class DebugSpeakReceiver : BroadcastReceiver() {
         MainActivity.instance?.debugSpeak(File(context.filesDir, name))
     }
 }
+
+/** DEBUG: `adb shell am broadcast -n com.leaps.voiceagent/.DebugBenchReceiver --ei pp 256 --ei tg 32` -> logcat LeapsBench. */
+class DebugBenchReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        MainActivity.instance?.debugBench(intent.getIntExtra("pp", 256), intent.getIntExtra("tg", 32))
+    }
+}

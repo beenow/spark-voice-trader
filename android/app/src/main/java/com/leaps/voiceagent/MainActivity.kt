@@ -89,6 +89,9 @@ class MainActivity : Activity() {
     @Volatile private var session = UUID.randomUUID().toString()
     private var threads = 4
     @Volatile private var restoredPrefix = IntArray(0)
+    /** Set by a new question: stops the speculative next-turn prefill between pieces. */
+    @Volatile private var specCancel = false
+    @Volatile private var turnSeq = 0
     @Volatile private var prefixFile: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -576,6 +579,7 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1); return
         }
         speaker.stop()
+        specCancel = true
         val r = ensureRecognizer() ?: return
         listening = true
         listenDone = false
@@ -754,12 +758,13 @@ class MainActivity : Activity() {
     // ================================================================ speech out
     /** Kokoro on the phone, sentence by sentence; Android TTS only where Kokoro cannot (see KokoroSpeaker). */
     private fun speak(s: String, flush: Boolean, answer: Boolean = false, mute: Boolean = false,
+                      onSynthDone: (() -> Unit)? = null,
                       onFinished: ((ttfaMs: Long, voices: Set<String>) -> Unit)? = null) {
         if (s.isBlank()) { onFinished?.invoke(-1, emptySet()); return }
         speakingCount.incrementAndGet()
         val used = mutableSetOf<String>()
         var first = -1L
-        speaker.speak(s, flush, mute = mute,
+        speaker.speak(s, flush, mute = mute, onSynthDone = onSynthDone,
             onFirstAudio = { ms, voice -> first = ms
                 if (answer) ui { ttfa.text = "$ms" }
                 if (answer && turnReleaseAt > 0) {
@@ -848,6 +853,22 @@ class MainActivity : Activity() {
         }.start()
     }
 
+    /** DEBUG: llama-bench-like numbers inside the app (pp from an empty cache, then tg), then restore the prefix KV. */
+    fun debugBench(pp: Int, tg: Int) = worker.execute {
+        if (!modelLoaded || restoredPrefix.isEmpty()) { android.util.Log.i("LeapsBench", "not ready"); return@execute }
+        val base = restoredPrefix
+        val toks = IntArray(pp) { base[(it % (base.size - 1)) + 1] }.also { it[0] = base[0] }
+        llama.reset()
+        val ms = llama.prefill(toks)
+        llama.reset()
+        val g = llama.generate(toks.copyOf(minOf(pp, 64)), tg, tg)    // decode from a short prompt
+        val tgs = g.optInt("gen_tokens") * 1000.0 / maxOf(1.0, g.optDouble("gen_ms"))
+        llama.reset()
+        prefixFile?.let { restoredPrefix = llama.loadState(it.absolutePath) }
+        android.util.Log.i("LeapsBench", "threads $threads pp$pp ${"%.0f".format(ms)} ms = ${"%.1f".format(pp * 1000.0 / ms)} tok/s · " +
+            "tg ${g.optInt("gen_tokens")} = ${"%.1f".format(tgs)} tok/s · kokoro ${if (speaker.ready) "loaded" else "off"} · ${tempC()}")
+    }
+
     private fun writeSoak(rec: JSONObject) {
         synchronized(soakLock) { runCatching { File(filesDir, "soak.jsonl").appendText(rec.toString() + "\n") } }
         android.util.Log.i("LeapsSoak", rec.toString())
@@ -860,6 +881,8 @@ class MainActivity : Activity() {
     // ================================================================ the turn
     private fun runTurn(question: String, fromVoice: Boolean = false, sid: String? = null, mute: Boolean = false,
                         rec: JSONObject? = null) {
+        specCancel = true
+        turnSeq++
         if (!modelLoaded) { note("model not loaded yet"); return }
         if (busy) { rec?.let { it.put("error", "busy"); writeSoak(it) }; return }
         busy = true
@@ -959,7 +982,27 @@ class MainActivity : Activity() {
             ?.put("tool_calls", r.optJSONArray("tool_calls") ?: JSONArray())?.put("say", answer)
             ?.put("display", r.optString("display"))?.put("fallback", r.optBoolean("fallback"))
             ?.put("server_error", r.optString("error").ifEmpty { null })?.put("temp", tempC())?.put("stt_final_ms", if (sttMs >= 0) sttMs else null)
-        speak(answer, false, answer = true, mute = mute) { ttfaMs, voices ->
+        // The next turn's prompt prefix (history as it will be rendered + state line), from the step server:
+        // prefilled once Kokoro has rendered this answer, so the follow-up only prefills its question.
+        val hint = r.optJSONArray("next_prefix")?.toIntArray()
+        val seq = turnSeq
+        val warmNext: (() -> Unit)? = hint?.takeIf { it.size > restoredPrefix.size }?.let { h -> {
+            if (seq == turnSeq) specCancel = false       // a newer question already started: skip this hint
+            worker.execute {
+                if (seq != turnSeq) return@execute
+                // In 64-token pieces so a new question (specCancel) stops it within one piece; what is done stays
+                // in the KV and is reused, the rest is simply prefilled by the turn as before.
+                val t0 = SystemClock.elapsedRealtime()
+                var end = restoredPrefix.size
+                while (end < h.size && !specCancel) {
+                    end = minOf(h.size, end + 64)
+                    if (llama.prefill(h.copyOf(end)) < 0) break
+                }
+                android.util.Log.i("LeapsTiming", "next-turn prefix: $end/${h.size} tokens ready in " +
+                    "${SystemClock.elapsedRealtime() - t0} ms${if (specCancel && end < h.size) " (cancelled by a new question)" else ""}")
+            }
+        } }
+        speak(answer, false, answer = true, mute = mute, onSynthDone = warmNext) { ttfaMs, voices ->
             rec?.let {
                 it.put("ttfa_ms", ttfaMs).put("end_to_audio_ms", if (ttfaMs >= 0) wall + ttfaMs else null)
                     .put("voice", when { voices.isEmpty() -> "none"; voices.size > 1 -> "kokoro+system"; else -> voices.first() })

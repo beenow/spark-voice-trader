@@ -56,3 +56,18 @@ def test_model_download(client):
     part = client.get(m["url"], headers={**H, "Range": "bytes=10-"})
     assert part.status_code == 206 and part.content == body[10:]
     assert client.get("/model/other.gguf", headers=H).status_code == 404
+
+
+def test_next_prefix_is_next_turn_prefix(client):
+    """The hint returned with an answer is (all but the question of) the next turn's first prompt."""
+    s = "np"
+    client.post("/step", json={"session": s, "question": "What's Nvidia trading at?"}, headers=H)
+    client.post("/step", json={"session": s, "model_output": '{"name": "get_quote", "parameters": {"symbol": "NVDA"}}'},
+                headers=H)
+    r = client.post("/step", json={"session": s, "model_output": "Nvidia is at {price}. It is {change_pct} today."},
+                    headers=H).json()
+    hint = r["next_prefix"]
+    nxt = client.post("/step", json={"session": s, "question": "And AMD?"}, headers=H).json()["tokens"]
+    common = next((i for i, (a, b) in enumerate(zip(hint, nxt)) if a != b), min(len(hint), len(nxt)))
+    assert len(hint) > 600 and common >= len(hint) - 1, (len(hint), common, len(nxt))
+    client.post("/step", json={"session": s, "reset": True}, headers=H)
