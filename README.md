@@ -64,6 +64,22 @@ tests/        pytest
 docs/         diagrams, memory design
 ```
 
+## On-device Android app
+
+The same trained Llama 3.2 1B also runs **on the phone**. `android/` is a Kotlin app for a Galaxy Z Fold
+(Snapdragon 8 Elite Gen 5):
+
+- **On the phone:** speech-to-text (Android SpeechRecognizer), the Llama 3.2 1B student (llama.cpp, Q4_K_M GGUF,
+  808 MB, the adapter fused into the base), and Kokoro-82M speech (ONNX Runtime + a Rust phonemizer).
+- **On the Mac (`voice/step_server.py`):** prompt rendering, the code checks, slot filling, memory and the tools.
+  The phone only generates, so every check is the same code that was evaluated.
+- **Speed:** the fixed system+tools prefix (577 tokens) is prefilled once and its KV cache saved, so a turn only
+  prefills the new tokens. Model time is about 1 s per turn, with Kokoro's first audio 0.7–1.0 s later.
+- **Quality:** the 4-bit GGUF scores 90.8 tool_set / 89.1 args on the test split, against 90.8 / 89.9 for the
+  full-precision MLX model.
+
+See [android/README.md](android/README.md) for the build and what runs where.
+
 ## Meta models used
 
 | role | model | how |

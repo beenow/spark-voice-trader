@@ -1,0 +1,11 @@
+.gradle/
+build/
+app/build/
+app/.cxx/
+local.properties
+third_party/
+*.gguf
+*.apk
+app/src/main/jniLibs/
+app/src/main/assets/phonemizer/
+phonemizer/target/
