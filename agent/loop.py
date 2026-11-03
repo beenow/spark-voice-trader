@@ -11,7 +11,7 @@ from tools import model_view, run_tool, schema
 from tools.result import ToolResult
 
 from .format import tool_content
-from .memory import (build_frame, cached_result, pending_order, qty_is_strike, repairs_on, resolve_followup,
+from .memory import (build_frame, cached_result, pending_order, whatif_followup, qty_is_strike, repairs_on, resolve_followup,
                      state_extras)
 from .slots import SlotBook, filler_line, fill, speakable
 from .validator import (SLOT_RE, binding_problems, check_answer, correct_symbol, named_companies, no_digits,
@@ -131,6 +131,33 @@ def _symbols_in(obj, world, out: set) -> set:
 _BOOK = re.compile(r"\b(my\s+(?:book|portfolio|account|positions|holdings)|the\s+(?:whole\s+)?market|everything)\b", re.I)
 
 
+# "why is X down", "what's driving X", "what's going on with X today": the trained answer is price + news;
+# "the technicals on X": indicators + levels. A model that runs only the first adds the companion (same symbol).
+_WHY_MOVE = re.compile(r"\bwhy\s+(?:is|are|'s|did|has)\b|\bwhat'?s\s+driving\b|\bwhat\s+is\s+driving\b|\bdriving\s+(?:it|that|this)\b"
+                       r"|\bwhat'?s\s+going\s+on\s+with\b|\bwhy\b.*\b(?:moving|up|down|falling|dropping|rallying)\b", re.I)
+_TECHNICALS = re.compile(r"\btechnicals?\b(?!\s+(?:indicator|rsi|ema))", re.I)
+
+
+def companion_calls(question: str, calls: list) -> tuple[list, str | None]:
+    """First decision only. The missing half of a trained parallel pair, phrase-anchored:
+    why/driving/going-on + only get_quote(s) on ONE symbol -> + get_news; technicals + only get_indicators on ONE
+    symbol -> + get_levels. Returns (calls, added tool or None)."""
+    def parts(c):
+        a = c.get("args") if c.get("args") is not None else c.get("arguments")
+        return str(c.get("tool") or c.get("name") or "").split(".")[-1].strip(), a if isinstance(a, dict) else {}
+    named = [parts(c) for c in calls]
+    tools = {t for t, _ in named}
+    syms = {str(a.get("symbol") or "").upper() for _, a in named}
+    if len(syms) != 1 or "" in syms or "ALL" in syms:
+        return calls, None
+    sym = next(iter(named))[1].get("symbol")
+    if tools == {"get_quote"} and _WHY_MOVE.search(question):
+        return list(calls) + [{"tool": "get_news", "args": {"symbol": sym}}], "get_news"
+    if tools == {"get_indicators"} and _TECHNICALS.search(question):
+        return list(calls) + [{"tool": "get_levels", "args": {"symbol": sym}}], "get_levels"
+    return calls, None
+
+
 def repair_args(tool: str, args, question: str, world) -> tuple:
     """Arguments the model got wrong in ways the user's words settle (the call would otherwise fail validation):
     a missing or unknown symbol when the question names exactly one company / ticker; what_if on the user's book or
@@ -220,6 +247,11 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
     pending: dict | None = None         # the draft held back for a quantity (stored on the frame)
     # "three" after "How many contracts…?": the held-back draft, completed in code (the model is not asked)
     forced = pending_order(history, question)
+    forced_tool = "draft_order"
+    if forced is None:
+        # "and twenty" after a what-if: re-run it with the new move, in code (the model would answer from memory)
+        forced = whatif_followup(history, question)
+        forced_tool = "what_if"
     code_text = None
     if not repairs_on():
         pass
@@ -263,7 +295,7 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
         t0 = time.perf_counter()
         try:
             if forced is not None:
-                resp, forced = {"tool_calls": [{"tool": "draft_order", "args": forced}]}, None
+                resp, forced = {"tool_calls": [{"tool": forced_tool, "args": forced}]}, None
             else:
                 resp = backend.decide(messages, tools_schema)
         except Exception as e:  # noqa: BLE001
@@ -284,6 +316,8 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
             break
 
         calls = resp.get("tool_calls") or []
+        if calls and steps == 0 and not tool_calls and repairs_on():
+            calls, _ = companion_calls(question, calls)
         if calls:
             if steps >= max_steps:
                 if not forced_answer:

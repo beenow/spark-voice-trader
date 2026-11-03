@@ -161,6 +161,11 @@ def repairs_on() -> bool:
     return os.environ.get("VOICE_REPAIRS", "1") != "0"
 
 
+_RANK_SAID = {r"\bpercent(?:age)?\b|\bpct\b": "pnl_pct",
+              r"\bby\s+weight\b|\b(?:largest|biggest)\s+(?:holding|position)s?\b|\bconcentrat": "weight",
+              r"\b(?:moved|moving|movers?)\b.*\btoday\b|\btoday'?s?\s+(?:biggest\s+)?movers?\b": "day_move"}
+
+
 def resolve_followup(tool: str, args: dict, question: str, history: list) -> tuple[dict, list[str]]:
     """Fill arguments the follow-up left implicit, from the last frame. Returns (args, filled keys; "said:k" =
     set from the question's own words — one side / one expiry named — which beat the model's value).
@@ -186,6 +191,16 @@ def resolve_followup(tool: str, args: dict, question: str, history: list) -> tup
         elif not st and re.search(r"\b(?:did|have)\s+i\s+(?:\w+\s+){0,2}(?:send|sent|place|placed|put|make|made|submit|enter)",
                                   question, re.I) and args.get("status") != "all":
             args["status"], filled = "all", filled + ["said:status"]
+    if tool == "get_orders":
+        # "anything filled today?" / "yesterday's orders": the one day the user named
+        days = {d for d in ("today", "yesterday") if re.search(rf"\b{d}\b", question, re.I)}
+        if len(days) == 1 and args.get("day") != next(iter(days)):
+            args["day"], filled = next(iter(days)), filled + ["said:day"]
+    if tool == "get_portfolio":
+        # the one ranking the user named: "in percent", "by weight", "biggest movers today"
+        rk = {v for k, v in _RANK_SAID.items() if re.search(k, question, re.I)}
+        if len(rk) == 1 and args.get("rank_by") != next(iter(rk)):
+            args["rank_by"], filled = next(iter(rk)), filled + ["said:rank_by"]
     if tool == "get_indicators":
         # the indicator and timeframe the user named; an unnamed timeframe is the default (daily)
         ind = {v for k, v in _INDICATOR_SAID.items() if re.search(k, question, re.I)}
@@ -260,7 +275,35 @@ def said_strikes(question: str) -> list[float]:
         if not (tail.strip() or plural):
             continue
         out.append(float(_W1[h.lower()] * 100 + (_W10S.get(t.lower()) or _W10[t.lower()]) + (_W1.get(o.lower(), 0) if o else 0)))
+    # "the six hundred calls", "nine hundred puts", "the four hundreds"
+    for h, plural, tail in re.findall(r"\b(" + "|".join(_W1) + r")\s+hundred(s?)\b(\s*(?:calls?|puts?|strike)?)", question, re.I):
+        if tail.strip() or plural:
+            out.append(float(_W1[h.lower()] * 100))
+    # "puts around two twenty", "calls at 250", "the call near three ten"
+    for m in re.finditer(r"\b(?:calls?|puts?|strike)\s+(?:at|around|near|by)\s+(?:the\s+)?(\d+(?:\.\d+)?|(?:"
+                         + "|".join(_W1) + r")\s+(?:hundred|" + "|".join(_W10) + r")(?:[\s-]+(?:" + "|".join(_W1) + r"))?)\b",
+                         question, re.I):
+        if re.match(r"\s*(?:dollars?|bucks|cents|each|per\b|a\s+contract|limit)", question[m.end():], re.I):
+            continue                                   # "calls at 3.50 limit": a price, not a strike
+        v = _strike_words(m.group(1))
+        if v is not None:
+            out.append(v)
     return list(dict.fromkeys(out))
+
+
+def _strike_words(text: str) -> float | None:
+    """"450" / "five hundred" / "four fifty" / "two seventy five" -> the number, else None."""
+    t = text.strip().lower()
+    if re.fullmatch(r"\d+(?:\.\d+)?", t):
+        return float(t)
+    w = re.split(r"[\s-]+", t)
+    if not w or w[0] not in _W1:
+        return None
+    if len(w) == 2 and w[1] == "hundred":
+        return float(_W1[w[0]] * 100)
+    if len(w) in (2, 3) and w[1] in _W10 and (len(w) == 2 or w[2] in _W1):
+        return float(_W1[w[0]] * 100 + _W10[w[1]] + (_W1[w[2]] if len(w) == 3 else 0))
+    return None
 
 
 def qty_is_strike(args: dict, question: str) -> bool:
@@ -320,6 +363,46 @@ def pending_order(history: list, question: str) -> dict | None:
              "ten": 10, "twenty": 20, "fifty": 50, "a hundred": 100}
     qty = int(w) if w.isdigit() else words.get(re.sub(r"\s+", " ", w))
     return dict(pend, qty=qty) if qty else None
+
+
+_PCT_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
+              "ten": 10, "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+              "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20, "twenty five": 25, "thirty": 30,
+              "forty": 40, "fifty": 50}
+_WHATIF_FU = re.compile(
+    r"\W*(?:ok(?:ay)?\W+|uh\W+|um\W+)?(?:and|what\s+about|how\s+about|what\s+if|try|now)?\s*(?:if\s+)?(?:it\s+|that\s+)?"
+    r"(?P<verb>drops?|falls?|goes\s+down|tanks?|rallies|rally|rises?|goes\s+up|jumps?)?\s*(?:by\s+)?"
+    r"(?P<num>\d+(?:\.\d+)?|twenty[\s-]five|" + "|".join(sorted(_PCT_WORDS, key=len, reverse=True)) + r")"
+    r"(?:\s*(?:percent|%|pct))?(?:\s+(?:instead|then))?\W*", re.I)
+
+
+def whatif_followup(history: list, question: str) -> dict | None:
+    """A bare re-run of the last turn's what_if with a new move ("and twenty", "what about fifteen percent",
+    "what if it drops thirty"): same symbol, the previous direction unless a direction word is said."""
+    if not history or not repairs_on():
+        return None
+    fr = getattr(history[-1], "frame", None) or {}
+    wi = [c for c in fr.get("calls") or [] if c.get("tool") == "what_if"]
+    if len(wi) != 1:
+        return None
+    m = _WHATIF_FU.fullmatch(question)
+    if not m:
+        return None
+    w = re.sub(r"[\s-]+", " ", m.group("num").lower())
+    n = float(w) if re.fullmatch(r"\d+(?:\.\d+)?", w) else _PCT_WORDS.get(w)
+    if not n or n > 100:
+        return None
+    prev = wi[0]["args"]
+    try:
+        sign = -1.0 if float(prev.get("move_pct") or -1) < 0 else 1.0
+    except (TypeError, ValueError):
+        sign = -1.0
+    verb = (m.group("verb") or "").lower()
+    if verb:
+        sign = -1.0 if re.match(r"drop|fall|goes\s+down|tank", verb) else 1.0
+    if not prev.get("symbol"):
+        return None
+    return {"symbol": prev["symbol"], "move_pct": _num(sign * n)}
 
 
 # --------------------------------------------------------------------------- commands + facts (code side)

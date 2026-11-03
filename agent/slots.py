@@ -109,6 +109,11 @@ def fill(template: str, book: SlotBook, mode: str) -> str:
     t = re.sub(r"(\{[A-Za-z_][A-Za-z0-9_]*\})\s*(%|percent\b)", r"\1", t)
     # age slots already end in "ago" ("two hours ago"): drop a template's own "ago" after them
     t = re.sub(r"(\{age_\d+(?:_\d+)?\})\s+ago\b", r"\1", t)
+    if mode == "spoken":
+        # an order ticket id read aloud is a string of digits: say "the ticket" instead (the screen shows the id)
+        t = re.sub(r"\s*,?\s*\b(?:as|under|with)\s+(?:(?:the\s+)?ticket\s+)?\{ticket_id(?:_\d+)?\}", "", t, flags=re.I)
+        t = re.sub(r"(?:\b(?:the|your|a)\s+)?(?:\bticket\s+)?\{ticket_id(?:_\d+)?\}", "the ticket", t, flags=re.I)
+        t = re.sub(r"(^|[.!?]\s+)the ticket\b", lambda m: m.group(1) + "The ticket", t)
     return SLOT_RE.sub(sub, t)
 
 
@@ -121,6 +126,8 @@ def speakable(text: str, world) -> str:
     text = re.sub(r"\b[A-Z]{2,5}\b", sub, text)
     # "up {change_pct}" renders as "up down two percent": keep the value's own direction word
     text = re.sub(r"\b(?:up|down)\s+(up|down)\b", r"\1", text, flags=re.I)
+    # a ratio slot already says "times": "one point three times times average"
+    text = re.sub(r"\btimes\s+times\b", "times", text, flags=re.I)
     # "a loss of down about three thousand dollars": the noun already carries the direction
     return re.sub(r"\b(loss|drop|decline|hit|gain|rise|increase)\s+of\s+(?:up|down|minus|plus)\s+", r"\1 of ", text,
                   flags=re.I)
