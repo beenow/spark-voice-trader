@@ -38,6 +38,14 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
     @Volatile private var synth: KokoroSynth? = null
     @Volatile private var track: AudioTrack? = null
     @Volatile var speed = 1.05f
+
+    /**
+     * Where answers play. null = the media route (A2DP to glasses/headphones when connected, else the speaker).
+     * A device = the call path to it (VOICE_COMMUNICATION), for Glasses mode where the SCO/LE link stays up.
+     */
+    @Volatile var commDevice: android.media.AudioDeviceInfo? = null
+        set(v) { if (field?.id != v?.id) { field = v; reopen = true } }
+    @Volatile private var reopen = false
     @Volatile var loadError: String? = null; private set
 
     val ready: Boolean get() = synth != null && phonemizer != null
@@ -159,6 +167,7 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
             if (item.gen != generation.get()) { if (item is Item.End) item.onDone?.invoke(); continue }
             when (item) {
                 is Item.Pcm -> {
+                    if (reopen) { reopen = false; track?.let { drain(it, frames, item.gen); it.release() }; track = null }
                     val t = track ?: open().also { track = it; frames = 0L }
                     var off = 0
                     while (off < item.samples.size && item.gen == generation.get()) {
@@ -206,21 +215,29 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
             @Deprecated("Deprecated in Java") override fun onError(u: String?) { if (u == id) done.countDown() }
             override fun onStop(u: String?, interrupted: Boolean) { if (u == id) done.countDown() }
         })
+        tts.setAudioAttributes(attributes())
         tts.speak(text, TextToSpeech.QUEUE_ADD, null, id)
         done.await(30, TimeUnit.SECONDS)
     }
 
     private fun open(): AudioTrack {
         val min = AudioTrack.getMinBufferSize(KokoroSynth.SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+        val comm = commDevice
+        Log.i("LeapsGlasses", "playback route: ${comm?.let { "call path to " + GlassesAudio.name(it) } ?: "media"}")
         return AudioTrack.Builder()
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+            .setAudioAttributes(attributes())
             .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
                 .setSampleRate(KokoroSynth.SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
             .setBufferSizeInBytes(maxOf(min, KokoroSynth.SAMPLE_RATE / 2 * 4))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+            .also { t -> comm?.let { t.setPreferredDevice(it) } }
     }
+
+    /** The answer's audio attributes for the current route (also used for the Android TTS fallback). */
+    fun attributes(): AudioAttributes = AudioAttributes.Builder()
+        .setUsage(if (commDevice != null) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
 
     fun close() {
         stop()

@@ -62,6 +62,14 @@ Not done:
 - Synthesizing the first clause while step 2 decodes: the answer is a template that the Mac fills and validates only once it is complete, and running Kokoro alongside the decode would compete for the same cores.
 - A phrase cache: the common replies are filled templates with numbers, so little would hit it.
 
+## Third pass, about 21:00–21:10
+
+| # | Change | Before | After |
+|---|---|---|---|
+| 19 | REGRESSION FIX (from #12): the 300 ms silence end-pointing ended the owner's utterance at a pause while the button was still held ("Anything that stopped" was answered; he meant "Anything that stops bleeding"). The silence extras are now 10 s, and only the release finalises. If the recognizer still ends while the button is held (a final, NO_MATCH or SPEECH_TIMEOUT), it is restarted and the text so far is kept. After a pause, a new segment's partials no longer contain the earlier words; that segment is detected (shorter, different first word) and the earlier words are kept | "What is Nvidia ⟨1.6 s pause⟩ trading at?" -> heard "Trading" | heard "What is Nvidia Trading", answered correctly; release->audio 1.9–2.4 s |
+| 20 | STT quality (logged only): the owner's first spoken turn was heard as "Can you help me with life". No change made | - | - |
+| 21 | Glasses (Bluetooth headset) support, see README "Glasses". Tested on the phone mic only: the AudioRecord -> PCM pipe -> on-device recognizer path, and the media-button tap (KEYCODE_MEDIA_PLAY_PAUSE / HEADSETHOOK) that starts and stops listening. NOT tested with the glasses: the SCO/LE link time, routing and touchpad events need the owner | - | phone-mic capture path: release->first audio 1.62 s |
+
 ## Note on later timings
 
 After about 20:15 the phone was at 24% battery on a wireless charger. The same question then took 1.7 s per turn

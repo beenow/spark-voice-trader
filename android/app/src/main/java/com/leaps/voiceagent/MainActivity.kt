@@ -103,6 +103,8 @@ class MainActivity : Activity() {
             if (x.containsKey("tts_xnn_threads")) e.putInt("tts_xnn_threads", x.getInt("tts_xnn_threads"))
             if (x.containsKey("model")) e.putString("model", x.getString("model"))   // part of a GGUF name
             if (x.containsKey("stt_partial_ms")) e.putInt("stt_partial_ms", x.getInt("stt_partial_ms"))
+            if (x.containsKey("mic_capture")) e.putBoolean("mic_capture", x.getBoolean("mic_capture"))   // debug: AudioRecord path on the phone mic
+            if (x.containsKey("glasses_mic")) e.putBoolean("glasses_mic", x.getBoolean("glasses_mic"))
             e.apply()
         }
         threads = prefs.getInt("threads", 6)   // Fold bench: 6 > 4 for prefill; 8 collapses under load
@@ -112,6 +114,10 @@ class MainActivity : Activity() {
         window.navigationBarColor = bg
         buildUi()
         tts = TextToSpeech(this) { st -> if (st == TextToSpeech.SUCCESS) tts?.language = Locale.US }
+        glasses = GlassesAudio(this) { d -> ui { showGlasses(d) } }
+        glasses.keepUp = prefs.getBoolean("glasses_mode", false)
+        showGlasses(glasses.device)
+        setupMediaSession()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         }
@@ -124,6 +130,9 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         if (instance === this) instance = null
+        mic?.stop()
+        mediaSession?.release()
+        glasses.close()
         cancelDownload = true
         recognizer?.destroy()
         tts?.shutdown()
@@ -190,12 +199,18 @@ class MainActivity : Activity() {
             background = rounded(phone, 20); setPadding(dp(12), dp(5), dp(12), dp(5))
         }
         val title = label("Leaps", 26f, fg, true)
+        glassesBadge = label("", 13.5f, Color.rgb(8, 18, 40), true).apply {
+            background = rounded(mac, 20); setPadding(dp(12), dp(5), dp(12), dp(5)); visibility = View.GONE
+        }
+        glassesBtn = button(glassesLabel()) { toggleGlassesMode() }
         val gear = label("Setup", 14f, muted).apply { setPadding(dp(12), dp(6), dp(4), dp(6)); setOnClickListener { showSetup(setupPanel.visibility != View.VISIBLE) } }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             addView(title)
             addView(View(context), LinearLayout.LayoutParams(dp(12), 1))
             addView(badge)
+            addView(View(context), LinearLayout.LayoutParams(dp(8), 1))
+            addView(glassesBadge)
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
             addView(gear)
         }
@@ -212,6 +227,8 @@ class MainActivity : Activity() {
             addView(passField); addView(View(context), LinearLayout.LayoutParams(1, dp(8)))
             addView(hrow(button("Get model") { setupModel() }, threadsBtn, button("Warm") { warm() },
                 button("New chat") { newSession() }))
+            addView(View(context), LinearLayout.LayoutParams(1, dp(8)))
+            addView(glassesBtn)
         }
 
         // where each step runs (lit per turn from local measurements; no network needed to draw it)
@@ -467,9 +484,11 @@ class MainActivity : Activity() {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        // Push-to-talk: release ends the utterance; keep the recognizer's own end-pointing short too.
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 300L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 300L)
+        // Push-to-talk: ONLY the release ends the utterance. Long silence windows so a pause while the button is
+        // held does not end it (300 ms cut "Anything that stops bleeding" at "Anything that stopped"); if the
+        // recognizer still ends early while held, onResults restarts it and keeps the text (heldText).
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10_000L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 10_000L)
     }
 
     private fun ensureRecognizer(): SpeechRecognizer? {
@@ -492,20 +511,49 @@ class MainActivity : Activity() {
             override fun onEvent(t: Int, p: Bundle?) {}
             override fun onPartialResults(p: Bundle?) {
                 p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let {
-                    talk.text = it; lastPartial = it
+                    // After a pause the recognizer may start a new segment whose partials no longer contain the
+                    // earlier words ("What is Nvidia" ... "Trading"): keep the finished segment.
+                    val prev = segPartial
+                    val pw = prev.trim().split(Regex("\\s+")).filter { w -> w.isNotEmpty() }
+                    val nw = it.trim().split(Regex("\\s+")).filter { w -> w.isNotEmpty() }
+                    // A new segment restarts short and with a different first word; a revision of the same
+                    // segment ("What's" -> "What is Nvidia") does not shrink, so it is not mistaken for one.
+                    if (pw.size >= 2 && nw.size <= maxOf(1, pw.size - 2) &&
+                        !nw.first().equals(pw.first(), ignoreCase = true)) {
+                        heldText = joinHeld(prev)
+                        android.util.Log.i("LeapsStt", "new segment after '$prev'; kept '$heldText'")
+                    }
+                    segPartial = it
+                    val t = joinHeld(it); talk.text = t; lastPartial = t
                 }
             }
             override fun onResults(p: Bundle?) {
                 val all = p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
                 android.util.Log.i("LeapsStt", "final $all (last partial: $lastPartial)")
                 // Some recognizers return an empty top hypothesis for the final; fall back to the best non-empty.
-                val q = all.firstOrNull { it.isNotBlank() }?.trim() ?: lastPartial
+                val got = all.firstOrNull { it.isNotBlank() }?.trim()
+                if (stillHeld()) {
+                    // Ended at a pause while the button is still down: keep the text and listen on.
+                    heldText = joinHeld(got ?: segPartial); segPartial = ""
+                    android.util.Log.i("LeapsStt", "ended early while held; keep '$heldText' and restart")
+                    lastPartial = heldText
+                    recognizer?.startListening(recognizerIntent())
+                    return
+                }
+                val q = got?.let { joinHeld(it) } ?: lastPartial
                 finishListening(q, "final")
             }
             override fun onError(code: Int) {
                 if (listenDone) return            // a partial already started the turn
+                if (stillHeld() && (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                    android.util.Log.i("LeapsStt", "error $code while held: restart")
+                    recognizer?.startListening(recognizerIntent()); return
+                }
+                if (!lastPartial.isNullOrBlank() && releasedAt > 0) { finishListening(lastPartial, "partial (error $code)"); return }
                 listenDone = true
                 listening = false
+                mic?.let { it.stop(); mic = null }
+                if (glassesTurn) { glassesTurn = false; Thread { glasses.release("stt error $code") }.start() }
                 talk.text = "Hold to talk"
                 if (useOnDeviceStt && (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                             code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
@@ -532,9 +580,121 @@ class MainActivity : Activity() {
         listening = true
         listenDone = false
         lastPartial = null
+        heldText = ""; segPartial = ""
+        pipeSource = false
         pressId++
         listenStart = SystemClock.elapsedRealtime()
+        val g = glasses.device
+        if (g != null && prefs.getBoolean("glasses_mic", true) || prefs.getBoolean("mic_capture", false)) {
+            glassesListen(r, g, pressId)
+            return
+        }
         r.startListening(recognizerIntent())
+    }
+
+    // ================================================================ glasses (Bluetooth headset)
+    private lateinit var glasses: GlassesAudio
+    private lateinit var glassesBadge: TextView
+    private lateinit var glassesBtn: Button
+    @Volatile private var mic: GlassesAudio.MicStream? = null
+    @Volatile private var glassesTurn = false
+    @Volatile private var lastMicGlasses = false
+    @Volatile private var linkMs = -1L
+    private var mediaSession: android.media.session.MediaSession? = null
+
+    /**
+     * Capture from the glasses' mic ourselves (AudioRecord on the BT input) and stream it into the recognizer:
+     * the recognizer service does not reliably follow the communication device. With no glasses and
+     * mic_capture set (debug), the same path runs on the phone mic.
+     */
+    private fun glassesListen(r: SpeechRecognizer, g: android.media.AudioDeviceInfo?, press: Int) {
+        talk.text = if (g != null) "Connecting glasses…" else "Listening (capture)…"
+        Thread {
+            linkMs = if (g != null) glasses.acquire("listen") else -1
+            ui {
+                if (press != pressId || !listening || releasedAt > 0) {      // released while the link came up
+                    glasses.release("press ended before link")
+                    listening = false; listenDone = true; releasedAt = 0; talk.text = "Hold to talk"
+                    note("released before the glasses link was up (${linkMs} ms): hold a little longer")
+                    return@ui
+                }
+                val pipe = android.os.ParcelFileDescriptor.createPipe()
+                val m = GlassesAudio.MicStream(if (g != null) glasses.inputDevice else null, pipe[1]) {
+                    ui { if (press == pressId && listening) stopListening() }     // hands-free: silence ends it
+                }
+                runCatching { m.start() }.onFailure {
+                    note("glasses mic failed: ${it.message}"); glasses.release("mic failed")
+                    listening = false; talk.text = "Hold to talk"; return@ui
+                }
+                mic = m
+                pipeSource = true
+                glassesTurn = g != null
+                sttOnDevice = true
+                talk.text = if (g != null) "Listening on glasses…" else "Listening…"
+                note("mic: ${m.routed}" + if (g != null) " · link ${if (linkMs >= 0) "$linkMs ms" else "failed"}" else "")
+                r.startListening(recognizerIntent().apply {
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, GlassesAudio.MicStream.RATE)
+                })
+            }
+        }.start()
+    }
+
+    private fun showGlasses(d: android.media.AudioDeviceInfo?) {
+        if (d == null) { glassesBadge.visibility = View.GONE; speaker.commDevice = null; return }
+        glassesBadge.text = "Glasses · ${d.productName}"
+        glassesBadge.visibility = View.VISIBLE
+        note("glasses connected: ${GlassesAudio.name(d)} · mic + speaker route here; tap the touchpad to talk")
+        if (glasses.keepUp) Thread { glasses.acquire("glasses mode"); ui { speaker.commDevice = if (glasses.linkUp) glasses.device else null } }.start()
+    }
+
+    private fun glassesLabel() = "Glasses mode: " + (if (prefs.getBoolean("glasses_mode", false)) "ON (link kept up, call audio)" else "OFF (link per turn, media audio)")
+
+    private fun toggleGlassesMode() {
+        val on = !prefs.getBoolean("glasses_mode", false)
+        prefs.edit().putBoolean("glasses_mode", on).apply()
+        glasses.keepUp = on
+        glassesBtn.text = glassesLabel()
+        Thread {
+            if (on) glasses.acquire("glasses mode on") else glasses.release("glasses mode off", force = true)
+            ui { speaker.commDevice = if (on && glasses.linkUp) glasses.device else null }
+        }.start()
+    }
+
+    /** Glasses touchpad tap (AVRCP play/pause or headset hook): start listening, tap again to stop. */
+    private fun setupMediaSession() {
+        val ms = android.media.session.MediaSession(this, "LeapsPTT")
+        ms.setCallback(object : android.media.session.MediaSession.Callback() {
+            override fun onMediaButtonEvent(i: Intent): Boolean {
+                val ev = if (android.os.Build.VERSION.SDK_INT >= 33) i.getParcelableExtra(Intent.EXTRA_KEY_EVENT, android.view.KeyEvent::class.java)
+                    else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+                GlassesAudio.log("media button ${ev?.keyCode} action ${ev?.action}")
+                if (ev?.action == android.view.KeyEvent.ACTION_DOWN && ev.repeatCount == 0 && ev.keyCode in PTT_KEYS) {
+                    ui { togglePtt("button ${ev.keyCode}") }; return true
+                }
+                return super.onMediaButtonEvent(i)
+            }
+            override fun onPlay() { GlassesAudio.log("onPlay"); ui { togglePtt("play") } }
+            override fun onPause() { GlassesAudio.log("onPause"); ui { togglePtt("pause") } }
+        })
+        ms.setPlaybackState(android.media.session.PlaybackState.Builder()
+            .setActions(android.media.session.PlaybackState.ACTION_PLAY_PAUSE or android.media.session.PlaybackState.ACTION_PLAY or
+                android.media.session.PlaybackState.ACTION_PAUSE)
+            .setState(android.media.session.PlaybackState.STATE_PAUSED, 0, 1f).build())
+        ms.isActive = true
+        mediaSession = ms
+    }
+
+    private var lastToggle = 0L
+
+    private fun togglePtt(src: String) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastToggle < 400) return                 // a tap can arrive as both a key and onPlay/onPause
+        lastToggle = now
+        GlassesAudio.log("ptt toggle from $src (listening=$listening)")
+        if (listening) stopListening() else startListening()
     }
 
     private var releasedAt = 0L
@@ -542,6 +702,15 @@ class MainActivity : Activity() {
     @Volatile private var sttFinalLast = -1L
 
     @Volatile private var lastPartial: String? = null
+    /** Text from recognizer sessions that ended early while the button was still held. */
+    @Volatile private var heldText = ""
+    @Volatile private var segPartial = ""
+
+    /** Button still down (not released), on the plain recognizer path (the PCM-pipe path cannot be restarted). */
+    private fun stillHeld() = listening && releasedAt == 0L && !pipeSource && !listenDone
+    @Volatile private var pipeSource = false
+
+    private fun joinHeld(t: String) = listOf(heldText, t.trim()).filter { it.isNotEmpty() }.joinToString(" ")
     @Volatile private var pressId = 0
     @Volatile private var listenDone = true
     @Volatile private var turnReleaseAt = 0L
@@ -549,6 +718,7 @@ class MainActivity : Activity() {
     private fun stopListening() {
         if (!listening) return
         releasedAt = SystemClock.elapsedRealtime()
+        mic?.let { it.stop(); mic = null }       // closes the PCM pipe: end of audio for the recognizer
         recognizer?.stopListening()
         // If the final result is slow, go with the last partial (0 = always wait for the final).
         val wait = prefs.getInt("stt_partial_ms", 600).toLong()
@@ -568,6 +738,14 @@ class MainActivity : Activity() {
         releasedAt = 0
         listening = false
         talk.text = "Hold to talk"
+        lastMicGlasses = glassesTurn
+        if (glassesTurn) {
+            glassesTurn = false
+            // Glasses mode keeps the link up and answers on the call path; otherwise drop it so the answer
+            // plays over A2DP media (the glasses' speakers in media quality).
+            speaker.commDevice = if (glasses.keepUp && glasses.linkUp) glasses.device else null
+            Thread { glasses.release("turn heard") }.start()
+        }
         val q = text?.trim()
         if (!q.isNullOrEmpty()) runTurn(q, fromVoice = true) else note("heard nothing")
     }
@@ -587,7 +765,9 @@ class MainActivity : Activity() {
                 if (answer && turnReleaseAt > 0) {
                     val e2e = SystemClock.elapsedRealtime() - turnReleaseAt
                     turnReleaseAt = 0
-                    android.util.Log.i("LeapsTiming", "release->first audio ${e2e}ms (stt ${sttFinalLast}ms ${sttKind}, tts first ${ms}ms, ${tempC()})")
+                    android.util.Log.i("LeapsTiming", "release->first audio ${e2e}ms (stt ${sttFinalLast}ms ${sttKind}" +
+                        (if (lastMicGlasses) ", glasses mic, link ${linkMs}ms, playback ${speaker.commDevice?.let { "call path" } ?: "media " + glasses.mediaRoute()}" else "") +
+                        ", tts first ${ms}ms, ${tempC()})")
                     note("release → first audio ${e2e} ms")
                 }
                 if (answer) note("first audio ${ms} ms after the answer arrived (${if (voice == "kokoro") "Kokoro on phone" else "Android TTS"})" +
@@ -645,7 +825,7 @@ class MainActivity : Activity() {
         val rate = java.nio.ByteBuffer.wrap(bytes, 24, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
         val pipe = android.os.ParcelFileDescriptor.createPipe()
         speaker.stop()
-        listening = true; listenDone = false; lastPartial = null; pressId++
+        listening = true; listenDone = false; lastPartial = null; heldText = ""; segPartial = ""; pipeSource = true; pressId++
         listenStart = SystemClock.elapsedRealtime()
         r.startListening(recognizerIntent().apply {
             putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
@@ -685,7 +865,10 @@ class MainActivity : Activity() {
         busy = true
         ui { talk.alpha = 0.5f }
         resetChips()
-        if (fromVoice) light("stt", sttOnDevice, if (sttOnDevice == true) "phone · offline" else "system recognizer")
+        if (fromVoice) light("stt", sttOnDevice, when {
+            lastMicGlasses -> "glasses mic → phone"
+            sttOnDevice == true -> "phone · offline"
+            else -> "system recognizer" })
         else light("stt", true, "typed")
         worker.execute {
             try { turn(question, sid ?: session, mute, rec) } catch (e: Exception) {
@@ -806,6 +989,9 @@ class MainActivity : Activity() {
     private fun JSONArray.toIntArray() = IntArray(length()) { getInt(it) }
 
     companion object {
+        private val PTT_KEYS = setOf(android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_HEADSETHOOK,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
+
         /** The live activity, for the debug soak hook (DebugAskReceiver). */
         @Volatile var instance: MainActivity? = null
     }

@@ -30,6 +30,26 @@ tokenized); the phone generates and posts `{session, model_output}`; repeat unti
 - Two-ticker comparison: 2.1 s turn.
 - See CHANGES-NIGHT.md for what was tried (an i8mm build was slower; 8 threads collapses under load).
 
+## Glasses (Meta Ray-Ban or any Bluetooth headset)
+
+Pair the glasses with the phone as a normal Bluetooth headset. When the app sees a Bluetooth SCO or LE Audio
+headset, a "Glasses · <name>" badge appears and:
+
+- **Mic:** the app records from the glasses' microphone itself (AudioRecord, VOICE_COMMUNICATION, preferred device =
+  the glasses) and streams the PCM into the on-device recognizer (`EXTRA_AUDIO_SOURCE`). The system recognizer
+  does not reliably follow the Bluetooth route on its own, so the app does not rely on it. The log shows the
+  device the capture was really routed to.
+- **Hands-free:** tap the glasses' touchpad (it arrives as play/pause or headset-hook on a MediaSession) to start
+  listening. Tap again to stop, or just stop talking: 0.9 s of silence after speech ends the turn. Holding the
+  on-screen button works too.
+- **Speaker:** with Glasses mode OFF (the default), the Bluetooth call link (SCO/LE) is brought up only while
+  listening and dropped as soon as the words are in. The answer then plays as media (A2DP) on the glasses in full
+  quality. With Glasses mode ON (Setup), the link stays up for the whole session: no per-turn switch-on cost
+  (often 0.5–1 s), but answers play on the narrow-band call path.
+- **Logs:** `adb logcat -s LeapsGlasses LeapsStt LeapsTiming` shows the device added/removed, the link time
+  ("acquire ... link up in N ms"), the capture route, the end of speech, the playback route, each tap, and
+  release->first audio with the glasses details.
+
 ## Agreement with the trained model
 
 The GGUF was checked against the MLX model (base + adapter) on 30 dev-split prompts, greedy, with the prompt
