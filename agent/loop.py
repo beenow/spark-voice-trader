@@ -103,6 +103,9 @@ _NUMW = (r"(?:\d+(?:\.\d+)?|zero|one|two|three|four|five|six|seven|eight|nine|te
 _ARITHMETIC = re.compile(r"\b" + _NUMW + r"\s+(?:plus|minus|times|divided\s+by|multiplied\s+by|over)\s+" + _NUMW + r"\b|"
                          r"\badd(?:ed)?\s+" + _NUMW + r"\s+(?:and|to)\s+" + _NUMW + r"\b|"
                          r"\b" + _NUMW + r"\s+and\s+" + _NUMW + r"\s+added\s+together\b", re.I)
+# "should I buy Tesla?": advice is declined in code, with what the agent can do instead
+_ADVICE = re.compile(r"^\W*(?:(?:so|hey|ok(?:ay)?|uh|um)\W+)*(?:should|would|do\s+you\s+think)\s+i\s+(?:buy|sell|short|"
+                     r"get\s+into|get\s+out\s+of|dump|load\s+up\s+on)\b", re.I)
 _UNSUPPORTED_TF = re.compile(r"\b(?:1|one|2|two|3|three|10|ten|15|fifteen|30|thirty)[\s-]*min(?:ute)?s?\b|"
                              r"\b(?:2|two|4|four)[\s-]*h(?:ou)?rs?\b|\bweekly\s+(?:chart|candles?|rsi|timeframe)\b|"
                              r"\b(?:on|the)\s+weekly\b|\bmonthly\s+(?:chart|candles?|rsi|timeframe)\b", re.I)
@@ -241,12 +244,14 @@ def _watchlist_turn(question: str, route: tuple, world, emit, t_start: float) ->
                   "step": 1, "lane": WATCH_LANE})
             tool_calls.append({"tool": "get_quote", "args": args, "ok": res["ok"], "step": 1, "lane": WATCH_LANE})
         chg = lambda x: "{" + names_by_sym[x]["change_pct"] + "}"
+        uni = getattr(world, "universe", {}) or {}
+        nm = lambda x: getattr(uni.get(x), "name", None) or x       # company names (a ticker like "V" reads badly)
         top = ranked[:3]
         answer = (f"Your watchlist has {int_words(len(ranked))} names; " +
-                  ", ".join(f"{x} is {chg(x)}" for x in top[:-1]) + (" and " if len(top) > 1 else "") +
-                  f"{top[-1]} is {chg(top[-1])}.")
+                  ", ".join(f"{nm(x)} is {chg(x)}" for x in top[:-1]) + (" and " if len(top) > 1 else "") +
+                  f"{nm(top[-1])} is {chg(top[-1])}.")
         if len(ranked) > 3:
-            answer += f" Weakest is {ranked[-1]}, {chg(ranked[-1])}."
+            answer += f" Weakest is {nm(ranked[-1])}, {chg(ranked[-1])}."
     display = fill(answer, book, "display")
     spoken = speakable(fill(answer, book, "spoken"), world)
     emit({"type": "answer", "template": answer, "display": display, "spoken": spoken, "fallback": False,
@@ -259,6 +264,19 @@ def _watchlist_turn(question: str, route: tuple, world, emit, t_start: float) ->
     return TurnResult(question, answer, display, spoken, [], tool_calls, book.values(), None,
                       {"total": time.perf_counter() - t_start, "decide": [], "tools": [], "filler_at": None},
                       False, turn)
+
+
+def ticket_sentence(ticket: dict, world) -> str:
+    """An option ticket's answer, from the ticket itself. Numbers as words (the ticket is not a slot result)."""
+    from tools.render import spoken as rspoken
+    uni = getattr(world, "universe", {}) or {}
+    name = getattr(uni.get(ticket["symbol"]), "name", None) or ticket["symbol"]
+    qty = int(ticket.get("qty") or 0)
+    side = ticket.get("side") or "call"
+    exp = (" expiring " + rspoken("expiry", ticket["expiry"], "get_option_chain")) if ticket.get("expiry") else ""
+    return (f"I've drafted a ticket to {ticket.get('direction') or 'buy'} {int_words(qty)} {name} "
+            f"{rspoken('strike_1', ticket['strike'], 'get_option_chain')} {side}{'s' if qty != 1 else ''}{exp}. "
+            "It needs your confirmation.")
 
 
 def _norm_q(q: str) -> str:
@@ -392,6 +410,12 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
             forced_tool, forced = rr[0], dict(rr[1])
     if not repairs_on():
         pass
+    elif forced is None and _ADVICE.search(question):
+        named = [x[0] for x in named_companies(question, world) + tickers_in(question, world)]
+        uni = getattr(world, "universe", {}) or {}
+        who = (getattr(uni.get(named[0]), "name", None) or named[0]) if len(set(named)) == 1 else None
+        code_text = (f"I can't tell you whether to buy or sell, but I can pull up {who}'s price, chart or news."
+                     if who else "I can't tell you what to buy or sell, but I can pull up any stock's price, chart or news.")
     elif forced is None and _UNSUPPORTED_TF.search(question):
         # a chart timeframe the tools don't have: say which ones exist, in code (no tool, no model)
         code_text = "I only have five-minute, hourly and daily charts. Want the daily?"
@@ -455,6 +479,16 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
         calls = resp.get("tool_calls") or []
         if calls and steps == 0 and not tool_calls and repairs_on():
             calls, _ = companion_calls(question, calls)
+        if calls and repairs_on():
+            # the same call twice in one decision (same tool, same arguments) runs once
+            seen, uniq = set(), []
+            for c in calls:
+                k = json.dumps([c.get("tool") or c.get("name"), c.get("args") if c.get("args") is not None
+                                else c.get("arguments")], sort_keys=True, default=str)
+                if k not in seen:
+                    seen.add(k)
+                    uniq.append(c)
+            calls = uniq
         if calls:
             if steps >= max_steps:
                 if not forced_answer:
@@ -632,6 +666,12 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
         answer = line or (FALLBACK_TICKET if ticket else (FALLBACK_DATA if tool_calls else FALLBACK_NONE))
     display = fill(answer, book, "display")
     spoken = speakable(fill(answer, book, "spoken"), world)
+    if (repairs_on() and ticket and ticket.get("kind") == "option" and ticket.get("strike") is not None
+            and "{strike" not in answer and not re.search(r"\d", re.sub(r"\{[^}]*\}", "", answer))):
+        # "I've drafted two of the second strike puts": the user needs to hear WHICH contract the ticket holds
+        answer = ticket_sentence(ticket, world)
+        display = fill(answer, book, "display")
+        spoken = speakable(fill(answer, book, "spoken"), world)
     if (repairs_on() and history and not fallback and not ticket and spoken == getattr(history[-1], "spoken", None)
             and _norm_q(question) != _norm_q(getattr(history[-1], "question", ""))):
         # a different question, word-for-word the same answer: say so instead of silently re-reading it

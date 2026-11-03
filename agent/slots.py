@@ -121,6 +121,11 @@ def fill(template: str, book: SlotBook, mode: str) -> str:
     def sub(m):
         return book.display(m.group(1)) if mode == "display" else book.spoken(m.group(1))
     t = re.sub(r"\$\s*(\{[A-Za-z_][A-Za-z0-9_]*\})", r"\1", label_chain(strike_first(template)))
+    # "most open interest is row four at {strike_4}": the row number is screen layout, not something to say
+    t = re.sub(r"\brow\s+(?:one|two|three|four|five|[1-5])\s+(?=at\b)", "", t, flags=re.I)
+    # the chain's expiry judgment word copied verbatim: "puts expiring {expiry} are soon" -> "are near-dated"
+    t = re.sub(r"\b(are|is)\s+soon\b(?=\s+(?:with|and)\b|[,.])", r"\1 near-dated", t, flags=re.I)
+    t = re.sub(r"\b(are|is)\s+far\b(?=\s+(?:with|and)\b|[,.])", r"\1 longer-dated", t, flags=re.I)
     t = re.sub(r"(\{[A-Za-z_][A-Za-z0-9_]*\})\s*(%|percent\b)", r"\1", t)
     # age slots already end in "ago" ("two hours ago"): drop a template's own "ago" after them
     t = re.sub(r"(\{age_\d+(?:_\d+)?\})\s+ago\b", r"\1", t)
@@ -144,6 +149,9 @@ def speakable(text: str, world) -> str:
     # a ratio slot already says "times": "one point three times times average"
     text = re.sub(r"\btimes\s+times\b", "times", text, flags=re.I)
     text = re.sub(r"\bone cents\b", "one cent", text, flags=re.I)
+    # "down nineteen percent for down about seven thousand dollars": say what the amount is
+    text = re.sub(r"\bfor\s+down\s+", "for a loss of ", text, flags=re.I)
+    text = re.sub(r"\bfor\s+up\s+", "for a gain of ", text, flags=re.I)
     # "{index_move} down" renders "down zero point two percent down": the value already says the direction
     text = re.sub(r"\b(up|down)(\s+(?:about\s+)?(?:[a-z]+[\s-]){1,6}?percent)\s+(?:up|down)\b", r"\1\2", text, flags=re.I)
     # "a loss of down about three thousand dollars": the noun already carries the direction

@@ -2,6 +2,8 @@
 ticket ids never read aloud, 'times times'. ScriptedBackend only; no model loads."""
 from __future__ import annotations
 
+import re
+
 from agent import ScriptedBackend, run_turn
 from agent.memory import resolve_followup, said_strikes, whatif_followup
 from agent.slots import speakable
@@ -150,3 +152,44 @@ def test_same_answer_to_a_new_question_is_not_reread():
 def test_trailing_direction_after_percent():
     assert speakable("the index down zero point two percent down.", World(1)) == "the index down zero point two percent."
     assert speakable("up three percent today", World(1)) == "up three percent today"
+
+
+def test_video_polish():
+    w = World(6)
+    r = run_turn("should I buy Tesla?", [], w, ScriptedBackend([]))
+    assert not r.tool_calls and "Tesla" in r.spoken and "can't tell you" in r.spoken
+    assert speakable("down nine percent for down about seven thousand dollars", w) == \
+        "down nine percent for a loss of about seven thousand dollars"
+    be = ScriptedBackend([
+        {"tool_calls": [{"tool": "draft_order", "args": {"symbol": "TSLA", "direction": "buy", "qty": 2, "side": "put",
+                                                          "strike": 430, "expiry_rule": "next_week"}}]},
+        {"answer": "I've drafted two of the second strike puts as {ticket_id}, awaiting your confirmation."}])
+    r = run_turn("buy two of the second strike", [], w, be)
+    assert "four thirty put" in r.spoken and "second strike" not in r.spoken and not re.search(r"\d", r.spoken)
+    from agent.slots import fill
+
+    class Book:
+        def spoken(self, name):
+            return "four forty"
+
+    assert fill("Most open interest is row four at {strike_4}.", Book(), "spoken") == "Most open interest is at four forty."
+
+
+def test_duplicate_call_runs_once():
+    w = World(7)
+    call = {"tool": "get_option_chain", "args": {"symbol": "META", "side": "put"}}
+    be = ScriptedBackend([{"tool_calls": [call, dict(call)]}, {"answer": "Meta puts expire {expiry}."}])
+    r = run_turn("meta puts", [], w, be)
+    assert [c["tool"] for c in r.tool_calls] == ["get_option_chain"]
+
+
+def test_expiry_judgment_wording():
+    from agent.slots import fill
+
+    class Book:
+        def spoken(self, name):
+            return "November sixth"
+
+    assert fill("Tesla puts expiring {expiry} are soon with high IV.", Book(), "spoken") == \
+        "Tesla puts expiring November sixth are near-dated with high IV."
+    assert fill("It is soon to tell.", Book(), "spoken") == "It is soon to tell."
