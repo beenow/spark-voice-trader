@@ -1,6 +1,8 @@
 """voice/step_server.py: the phone-generation loop (a fake phone posts model outputs back)."""
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from agent.backends import DEFAULT_LLAMA
@@ -16,14 +18,20 @@ def client(tmp_path_factory):
     from voice.step_server import create_app
     d = tmp_path_factory.mktemp("gguf")
     (d / "m.gguf").write_bytes(b"GGUF" + bytes(range(256)) * 4)
+    (d / "m.gguf.provenance.json").write_text(json.dumps(PROV))
     os.environ["STEP_MODEL_DIR"], os.environ["STEP_MODEL_FILES"] = str(d), "m.gguf"
+    os.environ["STEP_TURN_LOG"] = str(d / "logs" / "step_turns.jsonl")
     try:
-        return TestClient(create_app(passcode="pc", tokenizer=AutoTokenizer.from_pretrained(str(DEFAULT_LLAMA))))
+        c = TestClient(create_app(passcode="pc", tokenizer=AutoTokenizer.from_pretrained(str(DEFAULT_LLAMA))))
+        c.turn_log = d / "logs" / "step_turns.jsonl"
+        return c
     finally:
-        os.environ.pop("STEP_MODEL_DIR"), os.environ.pop("STEP_MODEL_FILES")
+        for k in ("STEP_MODEL_DIR", "STEP_MODEL_FILES", "STEP_TURN_LOG"):
+            os.environ.pop(k)
 
 
 H = {"X-Passcode": "pc"}
+PROV = {"adapter": "adapters/llama-1b-loop-r2", "run_id": "2e517641", "iter": 12885}
 
 
 def test_auth(client):
@@ -71,3 +79,51 @@ def test_next_prefix_is_next_turn_prefix(client):
     common = next((i for i, (a, b) in enumerate(zip(hint, nxt)) if a != b), min(len(hint), len(nxt)))
     assert len(hint) > 600 and common >= len(hint) - 1, (len(hint), common, len(nxt))
     client.post("/step", json={"session": s, "reset": True}, headers=H)
+
+
+def _turns(client, session):
+    lines = client.turn_log.read_text().splitlines() if client.turn_log.exists() else []
+    return [r for r in map(json.loads, lines) if r["session"] == session]
+
+
+def test_turn_log_records_what_the_phone_generated(client):
+    """Regression (2026-11-03 phone test): two of three turns ended after the phone's step-1 output with no tool
+    call, and the server had logged nothing but 'POST /step 200' -- the question, the model output and the spoken
+    answer were unrecoverable. Every turn must leave one JSON line with all three and the served model."""
+    s = "tl"
+    q = "What is Apple trading at?"
+    r = client.post("/step", json={"session": s, "question": q}, headers=H).json()
+    out = "Apple is a large technology company."          # step 1 answers without calling get_quote
+    for _ in range(4):
+        if "say" in r:
+            break
+        r = client.post("/step", json={"session": s, "model_output": out, "capped": False,
+                                       "stats": {"decode_tok_s": 30.0}}, headers=H).json()
+    assert "say" in r
+    rec = _turns(client, s)[-1]
+    assert rec["question"] == q and rec["outcome"] == "answered"
+    assert rec["say"] == r["say"] and rec["fallback"] == r["fallback"] and rec["tool_calls"] == r["tool_calls"]
+    assert rec["n_steps"] >= 1 and rec["steps"][0]["model_output"] == out
+    assert rec["steps"][0]["kind"] == "answer" and rec["steps"][0]["stats"] == {"decode_tok_s": 30.0}
+    assert rec["steps"][0]["prompt_tokens"] > 500
+    m = client.get("/model/manifest.json", headers=H).json()["files"][0]
+    f = rec["served"]["files"][0]
+    assert f["name"] == "m.gguf" and f["sha256"] == m["sha256"] and f["run_id"] == "2e517641" and f["iter"] == 12885
+    client.post("/step", json={"session": s, "reset": True}, headers=H)
+
+
+def test_turn_log_records_abandoned_turn(client):
+    """A turn the phone drops (a new question mid-turn: cut-off speech, hands-free re-listen) is logged too."""
+    s = "ab"
+    client.post("/step", json={"session": s, "question": "What is"}, headers=H)
+    client.post("/step", json={"session": s, "question": "What is Nvidia at?"}, headers=H)
+    first = _turns(client, s)[0]
+    assert first["question"] == "What is" and first["outcome"] == "abandoned" and first["n_steps"] == 0
+    client.post("/step", json={"session": s, "reset": True}, headers=H)
+    second = _turns(client, s)[1]
+    assert second["question"] == "What is Nvidia at?" and second["outcome"] == "abandoned"
+
+
+def test_manifest_carries_provenance(client):
+    m = client.get("/model/manifest.json", headers=H).json()["files"][0]
+    assert m["provenance"] == PROV

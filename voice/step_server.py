@@ -25,10 +25,17 @@ address via --host; never a public tunnel). Over USB, `adb reverse tcp:8310 tcp:
 Model files: $STEP_MODEL_DIR (default <home>/gguf), names in $STEP_MODEL_FILES
 (comma-separated, default llama-1b-loop-Q4_K_M.gguf). Only those names are ever served.
 Passcode: read from $VOICE_PASSCODE_FILE (default <home>/.passcode), never logged.
+Turn log: one JSON line per turn (question, each step's model output, tool calls, what was said, fallback,
+outcome, timings, and which GGUF served it) appended to $STEP_TURN_LOG (default <home>/logs/step_turns.jsonl;
+set it empty to turn it off). Local disk only. Without it a bad phone answer leaves nothing to diagnose from.
+Provenance: a `<gguf>.provenance.json` sidecar (adapter path/sha, run id, iter, build command) beside a served
+model is passed through in the manifest and logged at startup, so "which model is on the phone" is answerable.
 """
 from __future__ import annotations
 
 import argparse
+import datetime as dt
+import json
 import logging
 import os
 import queue
@@ -56,6 +63,7 @@ ANSWER_MAX_TOKENS = 70
 PHONE_TIMEOUT_S = 120.0
 SESSION_TTL_S = 3600.0
 _DONE = object()
+TURN_LOG_OUTPUT_CHARS = 2000   # per-step model output kept in the turn log (a step is <= MAX_TOKENS tokens)
 
 
 def _home() -> Path:
@@ -84,6 +92,44 @@ def model_files() -> dict[str, Path]:
 KOKORO_FILES = {"kokoro-model.onnx": ("model.onnx", "model"), "kokoro-voice-af_heart.bin": ("voice.bin", "voice"),
                 "kokoro-tokenizer.json": ("tokenizer.json", "tokenizer")}
 KOKORO_VOICE, KOKORO_SPEED = "af_heart", 1.05     # the Mac web app's voice and speed (voice/tts.py)
+
+
+def turn_log_path() -> Path | None:
+    v = os.environ.get("STEP_TURN_LOG")
+    if v is None:
+        return _home() / "logs" / "step_turns.jsonl"
+    return Path(os.path.expanduser(v)) if v.strip() else None
+
+
+def read_provenance(gguf: Path) -> dict | None:
+    """`<gguf>.provenance.json` written by the GGUF build (adapter, run id, iter); None if absent or unreadable."""
+    side = gguf.with_name(gguf.name + ".provenance.json")
+    try:
+        v = json.loads(side.read_text())
+        return v if isinstance(v, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+class TurnLog:
+    """Appends one JSON line per turn. A write failure is logged, never raised into the turn."""
+
+    def __init__(self, path: Path | None, served: dict):
+        self.path, self.served = path, served
+        self.lock = threading.Lock()
+
+    def write(self, rec: dict) -> None:
+        if self.path is None:
+            return
+        line = json.dumps({"ts": dt.datetime.now().astimezone().isoformat(timespec="seconds"), **rec,
+                           "served": self.served}, default=str)
+        try:
+            with self.lock:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+        except OSError:
+            log.exception("turn log write failed: %s", self.path)
 
 
 def kokoro_files() -> dict[str, tuple[Path, str]]:
@@ -134,17 +180,23 @@ class RemoteBackend:
         self.pb, self.outbox, self.inbox = pb, outbox, inbox
         self.frame_line = frame_line
         self.stats: list[dict] = []
+        self.steps: list[dict] = []     # what the phone generated at each step, for the turn log
+        self.abandoned: str | None = None  # set once the phone goes quiet or drops the turn; later steps fail fast
 
     def decide(self, messages: list[dict], tools_schema=None) -> dict:
+        if self.abandoned:      # run_turn retries a failed decide; nobody is listening any more
+            raise PhoneTimeout(self.abandoned)
         tokens = self.pb.tokens_for(messages, tools_schema)
         text = render_llama(messages, tools_schema, add_generation_prompt=True)
         self.outbox.put({"prompt": text, "tokens": tokens})
         try:
             reply = self.inbox.get(timeout=PHONE_TIMEOUT_S)
         except queue.Empty:
-            raise PhoneTimeout("phone did not answer")
+            self.abandoned = "phone did not answer"
+            raise PhoneTimeout(self.abandoned)
         if reply is _DONE:
-            raise PhoneTimeout("session reset")
+            self.abandoned = "turn dropped (new question or reset)"
+            raise PhoneTimeout(self.abandoned)
         raw = str(reply.get("model_output") or "")
         for t in ("<|eot_id|>", "<|eom_id|>", "<|end_of_text|>"):
             raw = raw.replace(t, "")
@@ -154,13 +206,18 @@ class RemoteBackend:
         st = dict(reply.get("stats") or {}, prompt_tokens=len(tokens),
                   kind="tool_calls" if "tool_calls" in out else ("answer" if "answer" in out else "error"))
         self.stats.append(st)
+        self.steps.append({"step": len(self.stats), "prompt_tokens": len(tokens), "kind": st["kind"],
+                           "capped": bool(reply.get("capped")), "model_output": raw[:TURN_LOG_OUTPUT_CHARS],
+                           "stats": reply.get("stats") or {}})
         out.setdefault("raw", raw)
         return out
 
 
 class Session:
-    def __init__(self, world, frame_line: bool, pb: LlamaPromptBuilder):
+    def __init__(self, world, frame_line: bool, pb: LlamaPromptBuilder, sid: str = "",
+                 turn_log: TurnLog | None = None):
         self.conv = Conversation()
+        self.sid, self.turn_log = sid, turn_log
         self.world, self.frame_line, self.pb = world, frame_line, pb
         self.outbox: queue.Queue = queue.Queue()
         self.inbox: queue.Queue = queue.Queue()
@@ -183,14 +240,37 @@ class Session:
 
         def work():
             t0 = time.perf_counter()
+            rec: dict = {"session": self.sid, "question": question}
+            reply: dict | None = None
             try:
                 res = self.conv.ask(question, lambda q, h, f: run_turn(q, h, world, be, on_event=on_event, facts=f,
                                                                        frame_line=self.frame_line),
                                     on_event, world=world)
-                self.outbox.put({"result": res, "total_s": time.perf_counter() - t0})
+                total = time.perf_counter() - t0
+                rec.update(outcome="abandoned" if be.abandoned else "answered", say=res.spoken, display=res.display,
+                           template=res.answer_template, tool_calls=_plain(res.tool_calls), fallback=bool(res.fallback))
+                reply = {"result": res, "total_s": total}
+            except PhoneTimeout as e:
+                # the phone went quiet, or abandoned the turn (a new question or a reset arrived mid-turn)
+                rec.update(outcome="abandoned", error=str(e))
+                reply = {"error": f"PhoneTimeout: {e}"}
             except Exception as e:  # noqa: BLE001
                 log.exception("turn failed")
-                self.outbox.put({"error": f"{type(e).__name__}: {e}"})
+                rec.update(outcome="error", error=f"{type(e).__name__}: {e}")
+                reply = {"error": rec["error"]}
+            finally:
+                # log BEFORE the reply is released: once it is in the outbox the phone (or a test) may act on it
+                if self.turn_log is not None:
+                    try:
+                        if be.abandoned:
+                            rec.setdefault("error", f"PhoneTimeout: {be.abandoned}")
+                        rec.update(steps=be.steps, n_steps=len(be.steps),
+                                   mac_total_s=round(time.perf_counter() - t0, 3))
+                        self.turn_log.write(rec)
+                    except Exception:  # noqa: BLE001 -- the log must never cost the phone its answer
+                        log.exception("turn log failed")
+                if reply is not None:
+                    be.outbox.put(reply)   # this turn's outbox, even if a newer turn has replaced self.outbox
 
         self.thread = threading.Thread(target=work, daemon=True)
         self.thread.start()
@@ -302,8 +382,17 @@ def create_app(model: str = "llama-1b-loop", passcode: str | None = None, tokeni
 
     models = model_files()
     kokoro = kokoro_files()
-    manifest = {"files": [{"name": n, "url": f"/model/{n}", "kind": "llm", "size": p.stat().st_size,
-                           "sha256": sha256_of(p)} for n, p in models.items()]
+    llm_files = [{"name": n, "url": f"/model/{n}", "kind": "llm", "size": p.stat().st_size, "sha256": sha256_of(p),
+                  "provenance": read_provenance(p)} for n, p in models.items()]
+    for f in llm_files:
+        log.info("serving %s sha256=%s provenance=%s", f["name"], f["sha256"],
+                 json.dumps(f["provenance"]) if f["provenance"] else "NONE (no .provenance.json sidecar)")
+    turn_log = TurnLog(turn_log_path(), {"model": model, "files": [
+        {"name": f["name"], "sha256": f["sha256"],
+         "adapter": (f["provenance"] or {}).get("adapter"), "run_id": (f["provenance"] or {}).get("run_id"),
+         "iter": (f["provenance"] or {}).get("iter")} for f in llm_files]})
+    log.info("turn log: %s", turn_log.path or "off")
+    manifest = {"files": llm_files
                 + [{"name": n, "url": f"/model/{n}", "kind": "tts", "role": role, "size": p.stat().st_size,
                     "sha256": sha256_of(p)} for n, (p, role) in kokoro.items()],
                 "tts": {"engine": "kokoro-82m-onnx", "voice": KOKORO_VOICE, "speed": KOKORO_SPEED} if kokoro else None}
@@ -330,7 +419,7 @@ def create_app(model: str = "llama-1b-loop", passcode: str | None = None, tokeni
                 sessions.pop(k)
             sess = sessions.get(req.session)
             if sess is None:
-                sess = sessions[req.session] = Session(world_factory(), frame_line, pb)
+                sess = sessions[req.session] = Session(world_factory(), frame_line, pb, req.session, turn_log)
             sess.touched = now
         with sess.lock:
             if req.reset:
