@@ -27,3 +27,4 @@ __pycache__/
 .venv/
 venv/
 .DS_Store
+docs/VIDEO-SCRIPT.md
