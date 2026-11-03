@@ -58,18 +58,19 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
     }
 
     /** Loads the phonemizer and the ONNX session (seconds). Blocking; returns the load time in ms or -1. */
-    fun load(dir: File, threads: Int = 4, xnnpack: Boolean = true, spin: Boolean = true): Long {
+    fun load(dir: File, threads: Int = 4, xnnpack: Boolean = true, spin: Boolean = true, xnnThreads: Int = threads): Long {
         val t0 = SystemClock.elapsedRealtime()
         return try {
             val p = Phonemizer(PhonemizerAssets.install(context))
             val s = try {
                 KokoroSynth(File(dir, "model.onnx"), File(dir, "voice.bin"), File(dir, "tokenizer.json"),
-                    preferXnnpack = xnnpack, threads = threads, allowSpinning = spin)
+                    preferXnnpack = xnnpack, threads = threads, allowSpinning = spin, xnnpackThreads = xnnThreads)
             } catch (e: Throwable) { p.close(); throw e }
             phonemizer = p; synth = s; loadError = null
-            config = "${s.executionProvider} t$threads${if (spin) "" else " nospin"}"
+            config = "${s.executionProvider} t$threads${if (xnnpack) "/x$xnnThreads" else ""}${if (spin) "" else " nospin"}"
             // Warm-up render: the first session.run pays one-off allocation costs.
             runCatching { s.synthesize(p.phonemize("Ready.").phonemes, speed) }
+            runCatching { s.synthesize(p.phonemize("Apple is at about two forty-nine, down one point four percent today.").phonemes, speed) }
             // Synth benchmark line for tuning: one fixed clause, timed after the warm-up.
             runCatching {
                 val b0 = SystemClock.elapsedRealtime()
@@ -91,6 +92,7 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
         queue.drainTo(dropped)
         dropped.filterIsInstance<Item.End>().forEach { it.onDone?.invoke() }
         track?.let { runCatching { it.pause(); it.flush() } }
+        frames = 0L
         systemTts()?.stop()
     }
 
@@ -148,8 +150,10 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
         }
     }
 
+    /** Frames written since the track was opened or last flushed (a flush resets the play head to 0). */
+    @Volatile private var frames = 0L
+
     private fun writerLoop() {
-        var frames = 0L
         while (true) {
             val item = queue.take()
             if (item.gen != generation.get()) { if (item is Item.End) item.onDone?.invoke(); continue }
@@ -170,24 +174,24 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
                     }
                 }
                 is Item.System -> {
-                    track?.let { drain(it, frames) }
+                    track?.let { drain(it, frames, item.gen) }
                     item.onFirst?.invoke()
                     sayWithSystem(item.text)
                 }
                 is Item.End -> {
-                    track?.let { drain(it, frames) }
+                    track?.let { drain(it, frames, item.gen) }
                     item.onDone?.invoke()
                 }
             }
         }
     }
 
-    private fun drain(t: AudioTrack, frames: Long) {
+    private fun drain(t: AudioTrack, frames: Long, gen: Int) {
         if (t.playState != AudioTrack.PLAYSTATE_PLAYING) runCatching { t.play() }
         val deadline = SystemClock.elapsedRealtime() + frames * 1000 / KokoroSynth.SAMPLE_RATE + 2000
         while (SystemClock.elapsedRealtime() < deadline) {
             val head = (runCatching { t.playbackHeadPosition }.getOrDefault(0)).toLong() and 0xffffffffL
-            if (head >= frames) break
+            if (head >= frames || gen != generation.get()) break      // stop() flushed: nothing left to wait for
             Thread.sleep(15)
         }
     }

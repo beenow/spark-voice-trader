@@ -100,7 +100,9 @@ class MainActivity : Activity() {
             if (x.containsKey("tts_threads")) e.putInt("tts_threads", x.getInt("tts_threads"))
             if (x.containsKey("tts_xnn")) e.putBoolean("tts_xnn", x.getBoolean("tts_xnn"))
             if (x.containsKey("tts_spin")) e.putBoolean("tts_spin", x.getBoolean("tts_spin"))
-            if (x.containsKey("model")) e.putString("model", x.getString("model"))   // e.g. Q8_0 or Q4_K_M
+            if (x.containsKey("tts_xnn_threads")) e.putInt("tts_xnn_threads", x.getInt("tts_xnn_threads"))
+            if (x.containsKey("model")) e.putString("model", x.getString("model"))
+            if (x.containsKey("stt_partial_ms")) e.putInt("stt_partial_ms", x.getInt("stt_partial_ms"))   // e.g. Q8_0 or Q4_K_M
             e.apply()
         }
         threads = prefs.getInt("threads", 6)   // Fold bench: 6 > 4 for prefill; 8 collapses under load
@@ -378,8 +380,8 @@ class MainActivity : Activity() {
 
     private fun loadVoice() = Thread {
         setVoiceInfoLoading()
-        val ms = speaker.load(store.kokoroDir(), prefs.getInt("tts_threads", 4), prefs.getBoolean("tts_xnn", true),
-            prefs.getBoolean("tts_spin", true))
+        val ms = speaker.load(store.kokoroDir(), prefs.getInt("tts_threads", 8), prefs.getBoolean("tts_xnn", false),
+            prefs.getBoolean("tts_spin", true), prefs.getInt("tts_xnn_threads", prefs.getInt("tts_threads", 8)))
         if (ms >= 0) { setVoiceInfo("${speaker.config} · ${speaker.speed}x · loaded in $ms ms"); note("Kokoro voice loaded on the phone in $ms ms (${speaker.provider})") }
         else setVoiceInfo(null)
     }.start()
@@ -435,7 +437,13 @@ class MainActivity : Activity() {
         try {
             if (modelPref().isEmpty()) checkServerModel()
             val toks = client().prefix().getJSONArray("tokens").toIntArray()
-            if (toks.contentEquals(restoredPrefix)) { note("warm: prefix KV already loaded, no prefill needed"); return }
+            if (toks.contentEquals(restoredPrefix)) {
+                // Touch every weight page once (mmap is lazy): one throwaway token after the prefix.
+                val w0 = SystemClock.elapsedRealtime()
+                llama.generate(toks + intArrayOf(toks.last()), 1, 1)
+                note("warm: prefix KV already loaded; weights paged in in ${SystemClock.elapsedRealtime() - w0} ms")
+                return
+            }
             val ms = llama.prefill(toks)
             restoredPrefix = toks
             val saved = prefixFile?.let { llama.saveState(it.absolutePath) } ?: false
@@ -459,6 +467,9 @@ class MainActivity : Activity() {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        // Push-to-talk: release ends the utterance; keep the recognizer's own end-pointing short too.
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 300L)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 300L)
     }
 
     private fun ensureRecognizer(): SpeechRecognizer? {
@@ -480,17 +491,20 @@ class MainActivity : Activity() {
             override fun onEndOfSpeech() {}
             override fun onEvent(t: Int, p: Bundle?) {}
             override fun onPartialResults(p: Bundle?) {
-                p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { talk.text = it }
+                p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }?.let {
+                    talk.text = it; lastPartial = it
+                }
             }
             override fun onResults(p: Bundle?) {
-                sttFinalMs = if (releasedAt > 0) SystemClock.elapsedRealtime() - releasedAt else -1
-                releasedAt = 0
-                listening = false
-                talk.text = "Hold to talk"
-                val q = p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.trim()
-                if (!q.isNullOrEmpty()) runTurn(q, fromVoice = true) else note("heard nothing")
+                val all = p?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
+                android.util.Log.i("LeapsStt", "final $all (last partial: $lastPartial)")
+                // Some recognizers return an empty top hypothesis for the final; fall back to the best non-empty.
+                val q = all.firstOrNull { it.isNotBlank() }?.trim() ?: lastPartial
+                finishListening(q, "final")
             }
             override fun onError(code: Int) {
+                if (listenDone) return            // a partial already started the turn
+                listenDone = true
                 listening = false
                 talk.text = "Hold to talk"
                 if (useOnDeviceStt && (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
@@ -516,6 +530,8 @@ class MainActivity : Activity() {
         speaker.stop()
         val r = ensureRecognizer() ?: return
         listening = true
+        listenDone = false
+        lastPartial = null
         listenStart = SystemClock.elapsedRealtime()
         r.startListening(recognizerIntent())
     }
@@ -524,7 +540,33 @@ class MainActivity : Activity() {
     @Volatile private var sttFinalMs = -1L
     @Volatile private var sttFinalLast = -1L
 
-    private fun stopListening() { if (listening) { releasedAt = SystemClock.elapsedRealtime(); recognizer?.stopListening() } }
+    @Volatile private var lastPartial: String? = null
+    @Volatile private var listenDone = true
+    @Volatile private var turnReleaseAt = 0L
+
+    private fun stopListening() {
+        if (!listening) return
+        releasedAt = SystemClock.elapsedRealtime()
+        recognizer?.stopListening()
+        // If the final result is slow, go with the last partial (0 = always wait for the final).
+        val wait = prefs.getInt("stt_partial_ms", 600).toLong()
+        if (wait > 0) main.postDelayed({ if (!listenDone && !lastPartial.isNullOrBlank()) finishListening(lastPartial, "partial") }, wait)
+    }
+
+    /** One result per press: the final result, or the last partial when the final is late (see stopListening). */
+    private fun finishListening(text: String?, kind: String) {
+        if (listenDone) return
+        listenDone = true
+        sttFinalMs = if (releasedAt > 0) SystemClock.elapsedRealtime() - releasedAt else -1
+        sttKind = kind
+        turnReleaseAt = releasedAt
+        releasedAt = 0
+        listening = false
+        talk.text = "Hold to talk"
+        val q = text?.trim()
+        if (!q.isNullOrEmpty()) runTurn(q, fromVoice = true) else note("heard nothing")
+    }
+    @Volatile private var sttKind = "final"
 
     // ================================================================ speech out
     /** Kokoro on the phone, sentence by sentence; Android TTS only where Kokoro cannot (see KokoroSpeaker). */
@@ -537,6 +579,12 @@ class MainActivity : Activity() {
         speaker.speak(s, flush, mute = mute,
             onFirstAudio = { ms, voice -> first = ms
                 if (answer) ui { ttfa.text = "$ms" }
+                if (answer && turnReleaseAt > 0) {
+                    val e2e = SystemClock.elapsedRealtime() - turnReleaseAt
+                    turnReleaseAt = 0
+                    android.util.Log.i("LeapsTiming", "release->first audio ${e2e}ms (stt ${sttFinalLast}ms ${sttKind}, tts first ${ms}ms, ${tempC()})")
+                    note("release → first audio ${e2e} ms")
+                }
                 if (answer) note("first audio ${ms} ms after the answer arrived (${if (voice == "kokoro") "Kokoro on phone" else "Android TTS"})" +
                     if (mute) " [muted: synthesis only]" else "") },
             onSentence = { v -> synchronized(used) { used += v } },
@@ -566,6 +614,53 @@ class MainActivity : Activity() {
             ui { runTurn(question, false, sid, mute, rec); started.countDown() }
             started.await(5, java.util.concurrent.TimeUnit.SECONDS)      // busy is set before the next one looks
         }
+    }
+
+    /** Battery + hottest CPU temperature, logged with every measurement (heat inflates everything). */
+    private fun tempC(): String {
+        val batt = registerReceiver(null, android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val b = (batt?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
+        val lvl = batt?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val cpu = runCatching {
+            File("/sys/class/thermal").listFiles()?.filter { z -> runCatching { File(z, "type").readText().startsWith("cpu-") &&
+                !File(z, "type").readText().contains("trip") }.getOrDefault(false) }
+                ?.maxOf { File(it, "temp").readText().trim().toInt() / 1000.0 }
+        }.getOrNull()
+        return "batt ${lvl}% ${b}C" + (cpu?.let { " cpu ${"%.0f".format(it)}C" } ?: "")
+    }
+
+    /**
+     * DEBUG: a spoken turn without a person. The WAV's PCM (16-bit mono) is streamed into the recognizer in real
+     * time through EXTRA_AUDIO_SOURCE (no speaker/mic loop); the end of the file is the button release.
+     */
+    fun debugSpeak(wav: File) = ui {
+        if (busy) return@ui
+        val r = ensureRecognizer() ?: return@ui
+        val bytes = wav.readBytes()
+        val rate = java.nio.ByteBuffer.wrap(bytes, 24, 4).order(java.nio.ByteOrder.LITTLE_ENDIAN).int
+        val pipe = android.os.ParcelFileDescriptor.createPipe()
+        speaker.stop()
+        listening = true; listenDone = false; lastPartial = null
+        listenStart = SystemClock.elapsedRealtime()
+        r.startListening(recognizerIntent().apply {
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+            putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, rate)
+        })
+        Thread {
+            android.os.ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { out ->
+                val chunk = rate / 50 * 2                      // 20 ms
+                var off = 44
+                while (off < bytes.size) {
+                    val n = minOf(chunk, bytes.size - off)
+                    runCatching { out.write(bytes, off, n) }.onFailure { return@Thread }
+                    off += n
+                    Thread.sleep(20)
+                }
+                ui { stopListening() }                         // end of speech = release
+            }
+        }.start()
     }
 
     private fun writeSoak(rec: JSONObject) {
@@ -652,7 +747,7 @@ class MainActivity : Activity() {
         }
         showEvents(r.optJSONArray("events"))
         val wall = SystemClock.elapsedRealtime() - t0
-        val breakdown = "threads $threads · " + parts.joinToString(" · ") + " · http(:8310 incl. Mac) " +
+        val breakdown = "${tempC()} · threads $threads · " + parts.joinToString(" · ") + " · http(:8310 incl. Mac) " +
             http.joinToString("+") + "ms" + (if (sttFinalMs >= 0) " · stt final ${sttFinalMs}ms" else "")
         sttFinalLast = sttFinalMs
         sttFinalMs = -1
@@ -675,7 +770,7 @@ class MainActivity : Activity() {
         rec?.put("steps", steps)?.put("http_ms", JSONArray(http))?.put("turn_ms", wall)?.put("model_ms", modelMs)
             ?.put("tool_calls", r.optJSONArray("tool_calls") ?: JSONArray())?.put("say", answer)
             ?.put("display", r.optString("display"))?.put("fallback", r.optBoolean("fallback"))
-            ?.put("server_error", r.optString("error").ifEmpty { null })?.put("stt_final_ms", if (sttMs >= 0) sttMs else null)
+            ?.put("server_error", r.optString("error").ifEmpty { null })?.put("temp", tempC())?.put("stt_final_ms", if (sttMs >= 0) sttMs else null)
         speak(answer, false, answer = true, mute = mute) { ttfaMs, voices ->
             rec?.let {
                 it.put("ttfa_ms", ttfaMs).put("end_to_audio_ms", if (ttfaMs >= 0) wall + ttfaMs else null)

@@ -3,5 +3,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
         <receiver android:name=".DebugAskReceiver" android:exported="true" />
+        <receiver android:name=".DebugSpeakReceiver" android:exported="true" />
     </application>
 </manifest>

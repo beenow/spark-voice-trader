@@ -31,3 +31,15 @@ class DebugAskReceiver : BroadcastReceiver() {
         act.debugAsk(q, sid, mute)
     }
 }
+
+/**
+ * DEBUG BUILDS ONLY. A spoken turn without a person: plays files/<wav> through the speaker while the recognizer
+ * listens, and "releases" the button when playback ends.
+ *   adb shell am broadcast -n com.leaps.voiceagent/.DebugSpeakReceiver --es wav q1.wav
+ */
+class DebugSpeakReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        val name = intent.getStringExtra("wav") ?: return
+        MainActivity.instance?.debugSpeak(File(context.filesDir, name))
+    }
+}
