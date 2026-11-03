@@ -9,6 +9,7 @@ from typing import Callable
 
 from tools import model_view, run_tool, schema
 from tools.result import ToolResult
+from tools.numwords import int_words
 
 from .format import tool_content
 from .memory import (build_frame, cached_result, pending_order, whatif_followup, qty_is_strike, repairs_on, resolve_followup,
@@ -138,6 +139,132 @@ _WHY_MOVE = re.compile(r"\bwhy\s+(?:is|are|'s|did|has)\b|\bwhat'?s\s+driving\b|\
 _TECHNICALS = re.compile(r"\btechnicals?\b(?!\s+(?:indicator|rsi|ema))", re.I)
 
 
+# "is anything holding up", "anything that stopped bleeding", "anything green": in a down market the user asks what
+# is recovering. The book when they say so, the watchlist screen for their list (trained: "bouncing off the lows on my
+# list" -> oversold), market breadth right after a market answer (the movers were just read out), else the model.
+_RECOVER = re.compile(r"\bstop(?:s|ped|ping)?\s+(?:the\s+)?(?:bleed(?:ing)?|falling|dropping|sliding)\b|\bholding\s+up\b"
+                      r"|\banything\s+(?:that'?s\s+|that\s+is\s+|is\s+)?(?:green|up|bouncing|recovering|rebounding)\b"
+                      r"|\bwhat'?s\s+(?:green|bouncing|recovering|rebounding)\b|\bin\s+the\s+green\b|\bbounc(?:e|es|ing)\s+back\b", re.I)
+_MY_BOOK = re.compile(r"\b(?:my\s+(?:book|positions?|portfolio|holdings?|stocks?|account)|i\s+(?:own|hold))\b", re.I)
+_MY_LIST = re.compile(r"\bwatch\s*list\b|\bmy\s+list\b", re.I)
+
+
+def recovery_route(question: str, history: list, world) -> tuple[str, dict] | None:
+    """(tool, args) for a 'what is recovering' question with no company named, else None."""
+    if not _RECOVER.search(question) or named_companies(question, world) or tickers_in(question, world):
+        return None
+    if _MY_LIST.search(question):
+        return "screen_watchlist", {"condition": "oversold"}
+    if _MY_BOOK.search(question):
+        return "get_portfolio", {"rank_by": "day_move"}
+    prev = [c["tool"] for c in ((getattr(history[-1], "frame", None) or {}).get("calls") or [])] if history else []
+    if "get_market" in prev:
+        return "get_market", {"focus": "breadth"}
+    return None                     # no context: the model's own call (trained: "bouncing in the market" -> movers)
+
+
+SAME_AGAIN = "Same as a moment ago: "
+
+
+# ------------------------------------------------------------------ watchlist (a code route, not a model tool)
+WATCH_LANE = "code: watchlist"
+_WL = r"(?:my\s+|the\s+|our\s+)?watch\s*-?\s*list"
+_WL_ADD = re.compile(r"\b(?:add|put|stick|throw|pop)\s+(?P<what>.+?)\s+(?:to|on|onto|in|into)\s+" + _WL + r"\b", re.I)
+_WL_REMOVE = re.compile(r"\b(?:remove|take|drop|delete|pull|kick)\s+(?P<what>.+?)\s+(?:off(?:\s+of)?|from|out\s+of)\s+" + _WL + r"\b",
+                        re.I)
+_WL_SHOW = re.compile(r"^\W*(?:(?:hey|ok(?:ay)?|so|uh|um)\W+)*(?:(?:what'?s|what\s+is)\s+(?:on|in)\s+" + _WL +
+                      r"|(?:show|read|give|tell)(?:\s+me)?\s+" + _WL + r"|(?:how'?s|how\s+is|how\s+are|check(?:\s+on)?)\s+" + _WL +
+                      r"(?:\s+(?:doing|looking))?|" + _WL + r"(?:\s+(?:movers|update|check))?)(?:\s+(?:today|now|right\s+now))?\W*$", re.I)
+
+
+def watchlist_route(question: str, world, history: list | None = None) -> tuple | None:
+    """("show",) | ("add", sym) | ("remove", sym) | ("clarify", text) | None. Screens ("oversold on my watchlist")
+    are not routed here: they stay with the model's screen_watchlist."""
+    q = question or ""
+    for kind, rx in (("add", _WL_ADD), ("remove", _WL_REMOVE)):
+        m = rx.search(q)
+        if m:
+            what = m.group("what")
+            syms = list(dict.fromkeys(x[0] for x in named_companies(what, world) + tickers_in(what, world)))
+            if not syms and history and re.fullmatch(r"\s*(?:it|that|this|that\s+one|this\s+one|that\s+stock|this\s+stock)\s*",
+                                                     what, re.I) and getattr(history[-1], "symbol", None):
+                syms = [history[-1].symbol]                  # "add it to my watchlist": the company just discussed
+            if len(syms) != 1:
+                return ("clarify", "Which company should I " + ("add to" if kind == "add" else "take off") +
+                        " your watchlist?")
+            return (kind, syms[0])
+    if _WL_SHOW.search(q):
+        return ("show",)
+    return None
+
+
+def _watchlist_turn(question: str, route: tuple, world, emit, t_start: float) -> "TurnResult":
+    """Run a watchlist route in code: quotes for every name (code-routed tool calls, lane 'code: watchlist'), a
+    code-filled two-sentence answer. Add / remove update world.watchlist; the frame carries the new list so the
+    Conversation persists it."""
+    book, tool_calls, results = SlotBook(), [], []
+    frame_extra: dict = {}
+    wl = list(getattr(world, "watchlist", []) or [])
+    if route[0] == "clarify":
+        answer = route[1]
+    elif route[0] in ("add", "remove"):
+        sym = route[1]
+        if route[0] == "add":
+            if sym in wl:
+                answer = f"{sym} is already on your watchlist."
+            else:
+                wl.append(sym)
+                answer = f"Added {sym} to your watchlist."
+        else:
+            if sym not in wl:
+                answer = f"{sym} isn't on your watchlist."
+            else:
+                wl.remove(sym)
+                answer = f"Took {sym} off your watchlist."
+        world.watchlist = wl
+        frame_extra["watchlist"] = list(wl)
+    elif not wl:
+        answer = "Your watchlist is empty. Say add, then a company name, to start one."
+    else:
+        emit({"type": "filler", "text": "Checking your watchlist."})
+        ranked = sorted(wl, key=lambda x: -world.quote(x).change_pct)
+        names_by_sym = {}
+        for sym in ranked:
+            args = {"symbol": sym}
+            emit({"type": "tool_call", "tool": "get_quote", "args": args, "step": 1, "lane": WATCH_LANE})
+            res = run_tool(world, "get_quote", args)
+            names = book.add("get_quote", res["slots"], res["words"], args)
+            names_by_sym[sym] = names
+            results.append({"tool": "get_quote", "args": dict(args), "result": res})
+            emit({"type": "tool_result", "tool": "get_quote", "ok": res["ok"], "words": res["words"],
+                  "error": res["error"], "slots_display": {names[k]: book.display(names[k]) for k in res["slots"]},
+                  "step": 1, "lane": WATCH_LANE})
+            tool_calls.append({"tool": "get_quote", "args": args, "ok": res["ok"], "step": 1, "lane": WATCH_LANE})
+        chg = lambda x: "{" + names_by_sym[x]["change_pct"] + "}"
+        top = ranked[:3]
+        answer = (f"Your watchlist has {int_words(len(ranked))} names; " +
+                  ", ".join(f"{x} is {chg(x)}" for x in top[:-1]) + (" and " if len(top) > 1 else "") +
+                  f"{top[-1]} is {chg(top[-1])}.")
+        if len(ranked) > 3:
+            answer += f" Weakest is {ranked[-1]}, {chg(ranked[-1])}."
+    display = fill(answer, book, "display")
+    spoken = speakable(fill(answer, book, "spoken"), world)
+    emit({"type": "answer", "template": answer, "display": display, "spoken": spoken, "fallback": False,
+          "code": True, "lane": WATCH_LANE})
+    frame = build_frame(question, tool_calls, book, answer, spoken, results)
+    frame.update(frame_extra)
+    syms = [c["args"]["symbol"] for c in tool_calls]
+    sym = syms[0] if syms else (route[1] if route[0] in ("add", "remove") else None)
+    turn = Turn(question, answer, display, spoken, sym, "watchlist", [c["tool"] for c in tool_calls], frame)
+    return TurnResult(question, answer, display, spoken, [], tool_calls, book.values(), None,
+                      {"total": time.perf_counter() - t_start, "decide": [], "tools": [], "filler_at": None},
+                      False, turn)
+
+
+def _norm_q(q: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", "", (q or "").lower()).strip()
+
+
 def companion_calls(question: str, calls: list) -> tuple[list, str | None]:
     """First decision only. The missing half of a trained parallel pair, phrase-anchored:
     why/driving/going-on + only get_quote(s) on ONE symbol -> + get_news; technicals + only get_indicators on ONE
@@ -252,7 +379,17 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
         # "and twenty" after a what-if: re-run it with the new move, in code (the model would answer from memory)
         forced = whatif_followup(history, question)
         forced_tool = "what_if"
+    if forced is None:
+        wr = watchlist_route(question, world, history)
+        if wr is not None:
+            res = _watchlist_turn(question, wr, world, emit, t_start)
+            res.events[:] = events
+            return res
     code_text = None
+    if forced is None and repairs_on():
+        rr = recovery_route(question, history, world)
+        if rr is not None:
+            forced_tool, forced = rr[0], dict(rr[1])
     if not repairs_on():
         pass
     elif forced is None and _UNSUPPORTED_TF.search(question):
@@ -495,6 +632,10 @@ def run_turn(question: str, history: list[Turn] | None, world, backend, max_step
         answer = line or (FALLBACK_TICKET if ticket else (FALLBACK_DATA if tool_calls else FALLBACK_NONE))
     display = fill(answer, book, "display")
     spoken = speakable(fill(answer, book, "spoken"), world)
+    if (repairs_on() and history and not fallback and not ticket and spoken == getattr(history[-1], "spoken", None)
+            and _norm_q(question) != _norm_q(getattr(history[-1], "question", ""))):
+        # a different question, word-for-word the same answer: say so instead of silently re-reading it
+        answer, display, spoken = SAME_AGAIN + answer, SAME_AGAIN + display, SAME_AGAIN + spoken
     emit({"type": "answer", "template": answer, "display": display, "spoken": spoken, "fallback": fallback})
 
     syms = [c["args"].get("symbol") for c in tool_calls if c["args"].get("symbol") not in (None, "ALL")]

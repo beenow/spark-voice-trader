@@ -101,3 +101,52 @@ def test_companion_call_runs_in_loop():
                           {"answer": "Nvidia is at {price}."}])
     r = run_turn("why is Nvidia moving today", [], w, be)
     assert [c["tool"] for c in r.tool_calls] == ["get_quote", "get_news"]
+
+
+def test_strike_first_and_one_cent():
+    from agent.slots import strike_first
+    t = "Costco puts expiring {expiry} have high IV. The {strike_2} put is {bid_2} bid, {ask_2} ask."
+    assert strike_first(t) == "The {strike_2} put is {bid_2} bid, {ask_2} ask. Costco puts expiring {expiry} have high IV."
+    assert strike_first("The {strike_1} call is {bid_1} bid. IV is high.") == "The {strike_1} call is {bid_1} bid. IV is high."
+    assert strike_first("Nvidia is at {price}. It is up today.") == "Nvidia is at {price}. It is up today."
+    assert speakable("the call is one cents bid, three cents ask", World(1)) == "the call is one cent bid, three cents ask"
+
+
+def _market_turn(w, q="how are stocks doing"):
+    be = ScriptedBackend([{"tool_calls": [{"tool": "get_market", "args": {"focus": "movers"}}]},
+                          {"answer": "The market is {index_move} today."}])
+    return run_turn(q, [], w, be)
+
+
+def test_recovery_routes():
+    from agent.loop import recovery_route
+    w = World(2)
+    hist = [_market_turn(w).turn]
+    assert recovery_route("is anything holding up", hist, w) == ("get_market", {"focus": "breadth"})
+    assert recovery_route("did my positions stop bleeding", [], w) == ("get_portfolio", {"rank_by": "day_move"})
+    assert recovery_route("anything bouncing on my watchlist", [], w) == ("screen_watchlist", {"condition": "oversold"})
+    assert recovery_route("anything green", [], w) is None                         # no context: the model
+    assert recovery_route("is Tesla holding up", [], w) is None                    # a company named: the model's
+    assert recovery_route("what's up", [], w) is None
+    be = ScriptedBackend([{"answer": "Breadth is {index_move}."}])
+    r = run_turn("anything that's stopped falling", hist, w, be)
+    assert [(c["tool"], c["args"]) for c in r.tool_calls] == [("get_market", {"focus": "breadth"})]
+
+
+def test_same_answer_to_a_new_question_is_not_reread():
+    from agent.loop import SAME_AGAIN
+    w = World(2)
+    first = _market_turn(w)
+    be = ScriptedBackend([{"tool_calls": [{"tool": "get_market", "args": {"focus": "movers"}}]},
+                          {"answer": "The market is {index_move} today."}])
+    r = run_turn("and overall", [first.turn], w, be)
+    assert r.spoken == SAME_AGAIN + first.spoken
+    be = ScriptedBackend([{"tool_calls": [{"tool": "get_market", "args": {"focus": "movers"}}]},
+                          {"answer": "The market is {index_move} today."}])
+    r = run_turn("how are stocks doing", [first.turn], w, be)          # the same question again: answer again
+    assert r.spoken == first.spoken
+
+
+def test_trailing_direction_after_percent():
+    assert speakable("the index down zero point two percent down.", World(1)) == "the index down zero point two percent."
+    assert speakable("up three percent today", World(1)) == "up three percent today"

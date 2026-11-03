@@ -100,12 +100,27 @@ def label_chain(template: str) -> str:
     return _IV.sub(iv, t)
 
 
+def strike_first(template: str) -> str:
+    """Option-chain answers lead with the strike line: "Costco puts expiring {expiry} have high IV. The {strike_2}
+    put is {bid_2} bid..." -> the strike sentence first, the summary after. Only when the first sentence names no
+    strike and a later one does."""
+    if "{strike" not in template:
+        return template
+    parts = re.split(r"(?<=[.!?])\s+", template.strip())
+    if len(parts) < 2 or "{strike" in parts[0]:
+        return template
+    k = next((i for i, p in enumerate(parts) if "{strike" in p), None)
+    if k is None:
+        return template
+    return " ".join([parts[k]] + parts[:k] + parts[k + 1:])
+
+
 def fill(template: str, book: SlotBook, mode: str) -> str:
     """mode 'display' or 'spoken'. Strips a '$' typed before a slot and '%' after it; labels bare option-chain
     numbers (label_chain)."""
     def sub(m):
         return book.display(m.group(1)) if mode == "display" else book.spoken(m.group(1))
-    t = re.sub(r"\$\s*(\{[A-Za-z_][A-Za-z0-9_]*\})", r"\1", label_chain(template))
+    t = re.sub(r"\$\s*(\{[A-Za-z_][A-Za-z0-9_]*\})", r"\1", label_chain(strike_first(template)))
     t = re.sub(r"(\{[A-Za-z_][A-Za-z0-9_]*\})\s*(%|percent\b)", r"\1", t)
     # age slots already end in "ago" ("two hours ago"): drop a template's own "ago" after them
     t = re.sub(r"(\{age_\d+(?:_\d+)?\})\s+ago\b", r"\1", t)
@@ -128,6 +143,9 @@ def speakable(text: str, world) -> str:
     text = re.sub(r"\b(?:up|down)\s+(up|down)\b", r"\1", text, flags=re.I)
     # a ratio slot already says "times": "one point three times times average"
     text = re.sub(r"\btimes\s+times\b", "times", text, flags=re.I)
+    text = re.sub(r"\bone cents\b", "one cent", text, flags=re.I)
+    # "{index_move} down" renders "down zero point two percent down": the value already says the direction
+    text = re.sub(r"\b(up|down)(\s+(?:about\s+)?(?:[a-z]+[\s-]){1,6}?percent)\s+(?:up|down)\b", r"\1\2", text, flags=re.I)
     # "a loss of down about three thousand dollars": the noun already carries the direction
     return re.sub(r"\b(loss|drop|decline|hit|gain|rise|increase)\s+of\s+(?:up|down|minus|plus)\s+", r"\1 of ", text,
                   flags=re.I)

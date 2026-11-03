@@ -23,6 +23,7 @@ from tools.schema import TOOL_SCHEMAS
 FRAME_VERSION = 1
 MAX_TURNS = 6                 # turns kept per session (the model sees the last 3)
 MAX_FACTS = 5
+MAX_WATCHLIST = 30
 RETENTION_S = 24 * 3600       # turns older than this are dropped on load
 # How long a fetched result may be reused instead of calling the tool again (seconds). Account data changes
 # when orders fill; prices move; news and fundamentals are slow. draft_order / what_if / resolve_symbol: never.
@@ -494,17 +495,21 @@ class SessionStore:
             turns = [t for t in d.get("turns") or [] if isinstance(t, dict) and isinstance(t.get("question"), str)
                      and (t.get("ts") or (t.get("frame") or {}).get("ts") or 0) >= cutoff]
             facts = [f for f in d.get("facts") or [] if isinstance(f, str)][:MAX_FACTS]
-            return {"turns": turns, "facts": facts}
+            wl = d.get("watchlist")
+            wl = [w for w in wl if isinstance(w, str)][:MAX_WATCHLIST] if isinstance(wl, list) else None
+            return {"turns": turns, "facts": facts, "watchlist": wl}
         except (OSError, ValueError, TypeError, AttributeError):
-            return {"turns": [], "facts": []}
+            return {"turns": [], "facts": [], "watchlist": None}
 
-    def save(self, key: str, turns: list[dict], facts: list[str]) -> None:
+    def save(self, key: str, turns: list[dict], facts: list[str], watchlist: list[str] | None = None) -> None:
         p = self.path(key)
         fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
         try:
             with os.fdopen(fd, "w") as f:
-                json.dump({"v": FRAME_VERSION, "turns": turns[-MAX_TURNS:], "facts": facts[:MAX_FACTS]}, f,
-                          ensure_ascii=False, default=str)
+                doc = {"v": FRAME_VERSION, "turns": turns[-MAX_TURNS:], "facts": facts[:MAX_FACTS]}
+                if watchlist is not None:
+                    doc["watchlist"] = list(watchlist)[:MAX_WATCHLIST]
+                json.dump(doc, f, ensure_ascii=False, default=str)
             os.chmod(tmp, 0o600)
             os.replace(tmp, p)
         except BaseException:
@@ -551,6 +556,7 @@ class Conversation:
         self.store, self.key = store, key
         self.turns: list = []
         self.facts: list[str] = []
+        self.watchlist: list[str] | None = None   # None = the world's own watchlist
         self.gen = 0                 # bumped by clear(): a turn that started before a clear is not recorded
         self.closed = False          # set when the connection ends: a turn still running is not recorded
         self._lock = threading.Lock()
@@ -562,6 +568,7 @@ class Conversation:
                 except (KeyError, TypeError, ValueError):
                     continue
             self.facts = d["facts"]
+            self.watchlist = d.get("watchlist")
 
     @property
     def history(self) -> list:
@@ -570,10 +577,10 @@ class Conversation:
     def _persist(self) -> None:
         if self.store is not None and self.key:
             turns = [turn_to_dict(t) for t in self.turns if hasattr(t, "question") and hasattr(t, "tools")]
-            if not turns and not self.facts:
+            if not turns and not self.facts and self.watchlist is None:
                 self.store.clear(self.key)
             else:
-                self.store.save(self.key, turns, self.facts)
+                self.store.save(self.key, turns, self.facts, self.watchlist)
 
     def clear(self, scope: str = "all") -> None:
         with self._lock:
@@ -634,7 +641,12 @@ class Conversation:
             if record:
                 self.record(res, gen)
             return res
+        if world is not None and self.watchlist is not None:
+            world.watchlist = list(self.watchlist)          # this session's watchlist (screens use it too)
         result = run(question, self.history if history is None else history, list(self.facts))
+        fr = getattr(getattr(result, "turn", None), "frame", None) or {}
+        if record and isinstance(fr.get("watchlist"), list):
+            self.watchlist = list(fr["watchlist"])          # an add / remove: persisted with the session
         if record:
             self.record(result, gen)
         return result

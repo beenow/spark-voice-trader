@@ -8,6 +8,8 @@ model was taught by **Muse Spark**, which wrote the tool-call traces it was fine
 Market data is synthetic on purpose. One seeded generator backs all 14 tools, so prices, positions, option
 chains and P&L are fake but consistent with each other. The point is to show that a small local model can choose
 and chain tools correctly, not that the numbers are real.
+The watchlist ("what's on my watchlist", "add Netflix to my watchlist") is a code route, not a model tool: code runs the
+quotes and fills the answer, and those calls are marked `lane: "code: watchlist"` in the event trace.
 
 > Not financial advice. The agent reports mock data and drafts order tickets that need a confirmation outside the
 > model. Voice alone never sends an order.
