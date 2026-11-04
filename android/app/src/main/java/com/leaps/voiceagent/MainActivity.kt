@@ -41,8 +41,8 @@ import java.util.concurrent.Executors
  * Leaps on-device voice agent (demo app).
  *
  * ON THE PHONE: speech-to-text (Android SpeechRecognizer, on-device recognizer when available), the Llama 3.2 1B
- * model (llama.cpp, CPU, every token generated here) and text-to-speech (Kokoro-82M on ONNX Runtime + the Rust
- * misaki phonemizer; Android TextToSpeech only as the fallback).
+ * model (llama.cpp, CPU, every token generated here) and text-to-speech (Android TextToSpeech, or an on-device
+ * voice when the build includes one: see OnDeviceVoice).
  * ON THE MAC (step server, voice/step_server.py): prompt rendering, output parsing, validators/repairs, tool
  * execution on the mock market, slot fill and conversation memory. See android/README.md.
  */
