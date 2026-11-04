@@ -259,7 +259,7 @@ function techChart(d, rng, focus) {
   const rlast = t.rsi[t.rsi.length - 1];
   const rsiShown = rng !== "1D" && d.indicators ? d.indicators.rsi : rlast;
   const rsi = `<div class="rsi ${rOn ? "hl" : ""}" id="sec-rsi"><div class="legend" style="justify-content:space-between;padding:0 4px">
-      <span class="${rOn ? "hl" : ""}">RSI 14 · ${t.tf}</span><span class="${rOn ? "hl" : ""}">${rsiShown == null ? "–" : Number(rsiShown).toFixed(1)}${rsiShown >= 70 ? " overbought" : rsiShown <= 30 ? " oversold" : ""}</span></div>
+      <span class="${rOn ? "hl" : ""}">RSI 14 · ${t.tf}</span><span class="${rOn ? "hl" : ""}">${rsiShown == null ? "-" : Number(rsiShown).toFixed(1)}${rsiShown >= 70 ? " overbought" : rsiShown <= 30 ? " oversold" : ""}</span></div>
     <svg width="100%" viewBox="0 0 ${w} ${rh}" style="display:block">
       <rect x="0" y="${ry(70)}" width="${PR}" height="${ry(30) - ry(70)}" fill="rgba(110,160,255,.07)"/>
       <line x1="0" x2="${PR}" y1="${ry(70)}" y2="${ry(70)}" stroke="#f87171" stroke-dasharray="4 4" stroke-width="1"/>
