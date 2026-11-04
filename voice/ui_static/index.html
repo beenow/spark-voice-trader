@@ -146,6 +146,9 @@ function agentNote(byAgent, text) {
   return `<div class="agent ${byAgent ? "on" : ""}"><span class="dot"></span>${esc(text || "Opened by Leaps")}</div>`;
 }
 
+// the chart at the top of the view: the position card under it stays in sight
+function topChart() { const c = document.getElementById("sec-chart"); if (c) c.scrollIntoView({ behavior: "smooth", block: "start" }); }
+
 function flash(id, scroll = true, block = "center") {
   const el = document.getElementById(id);
   if (!el) return;
@@ -275,18 +278,20 @@ async function renderSymbol(nav) {
   $("acct").innerHTML = `${money(d.price)}`;
   const tab = nav.tab || "overview";
   const focus = nav.byAgent ? chartFocus(nav) : [];
-  // a position question shows the position card; with a technical call too, compactly ABOVE the chart, both lit
+  // layout: chart on top, the position card right under it, then the tabs. A position question lights the card;
+  // with a technical call too the card is compact so the chart and the card fit in one view, both lit.
   const posFirst = nav.byAgent && (nav.sections || []).includes("position") && d.positions.length > 0;
   const posCard = (compact) => d.positions.length ? `<div class="card${compact ? " compact" : ""}" id="sec-position"><h3>Your position</h3>${d.positions.map((p) => `<div class="row"><div class="l"><div class="sym">${esc(p.label)}</div>
         <div class="sub">${p.qty} ${p.kind === "option" ? "contracts" : "shares"} · avg ${money(p.avg_cost)}</div></div>
         <div class="r"><div>${money(p.value, 0)}</div><div class="${cls(p.pnl)}" style="font-size:12.5px">${smoney(p.pnl)} (${pct(p.pnl_pct)})</div></div></div>`).join("")}</div>` : "";
   if (nav.byAgent && focus.length) S.chart = ["1H", "5m"].includes(nav.timeframe) ? "1D" : "3M";   // match the call
   const rng = S.chart in d.chart ? S.chart : "1D";
-  const head = `${agentNote(nav.byAgent)}${posFirst ? posCard(focus.length > 0) : ""}
+  const head = `${agentNote(nav.byAgent)}
     <div class="card" id="sec-chart"><div class="muted" style="font-size:13px">${esc(d.name)}</div>
       <div class="big">${money(d.price)}</div><div class="${cls(d.change_pct)}" style="font-weight:600">${pct(d.change_pct)} today</div>
       <div style="margin:10px -4px 4px">${d.quote_only ? chart(d.chart[rng].c, [{ v: d.prev_close, c: "#8796a8", t: "prev" }], d.change_pct >= 0) : techChart(d, rng, focus)}</div>
       <div class="seg">${["1D", "3M", "6M"].map((r) => `<button class="${r === rng ? "on" : ""}" onclick="UI.setRange('${r}')">${r}</button>`).join("")}</div></div>
+    ${posCard(posFirst && (focus.length > 0 || nav.seq))}
     ${d.quote_only ? "" : `<div class="tabs"><button class="${tab === "overview" ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${sym}',tab:'overview'},true)">Overview</button>
       ${d.options ? `<button class="${tab === "options" ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${sym}',tab:'options'},true)">Options</button>` : ""}</div>`}`;
   let body = "";
@@ -294,8 +299,7 @@ async function renderSymbol(nav) {
     body = await optionsBody(d, nav);
   } else if (!d.quote_only) {
     const ind = d.indicators, lv = d.levels, f = d.fundamentals;
-    const posHtml = posFirst ? "" : posCard(false);
-    body = `${posHtml}
+    body = `
       <div class="card" id="sec-news"><h3>News · <span class="tag ${d.news.tone === "positive" ? "good" : d.news.tone === "negative" ? "bad" : ""}">${d.news.tone}</span></h3>
         ${d.news.items.map((n) => `<div class="news"><div>${esc(n.headline)}</div><div class="sub">${n.age_hours < 1 ? "under an hour" : Math.round(n.age_hours) + "h"} ago</div></div>`).join("")}</div>
       <div class="card" id="sec-fundamentals"><h3>Fundamentals</h3><div class="grid2">
@@ -317,7 +321,12 @@ async function renderSymbol(nav) {
   $("view").innerHTML = head + body + trade;
   if (nav.byAgent) {
     if (tab === "options") flash("sec-options");
-    else if (posFirst) { if (focus.length) flash("sec-chart", false); flash("sec-position", true, "start"); }
+    else if (nav.flash) {          // a step of a multi-part answer: the part being spoken now
+      if (nav.flash === "position") { topChart(); flash("sec-position", false); }
+      else if (nav.flash === "chart") { topChart(); flash(focus.length === 1 && focus[0] === "rsi" ? "sec-rsi" : "sec-chart", false); }
+      else flash("sec-" + nav.flash);
+    }
+    else if (posFirst) { topChart(); if (focus.length) flash("sec-chart", false); flash("sec-position", false); }
     else if (focus.length) flash(focus.length === 1 && focus[0] === "rsi" ? "sec-rsi" : "sec-chart");
     else flash("sec-" + ((nav.sections || []).find((s) => s !== "chart" && s !== "indicators" && s !== "levels") || "chart"));
   }
