@@ -97,11 +97,11 @@ def parse_glimmer(text: str) -> dict:
 class GlimmerBackend:
     """Muse Glimmer via mlx_lm, using the model's own chat template + <atem:function_calls> tool format.
 
-    mode="trained" (default when an adapter is given) — the CANONICAL TRAINED FORMAT (agent/format.py):
+    mode="trained" (default when an adapter is given) - the CANONICAL TRAINED FORMAT (agent/format.py):
       assistant headers constrained to ' to=<tool>' / ' to=user'; no forced first tool; no reasoning stub;
       after a tool header the template-invariant '<atem:function_calls>...' prefix is forced; after
       '</atem:function_calls>' only <|eot|> (done) or <|eom|> (another call) may follow.
-    mode="base" — honest best-effort baseline for the untrained model: same constraints plus a short
+    mode="base" - honest best-effort baseline for the untrained model: same constraints plus a short
       pre-written reasoning message standing in for the model's own slow `to=self` channel, and
       resolve_symbol hidden. `force_first_tool` (default False) makes step one a tool call.
     Both: KV cache kept within a turn; system+tools prefix prefilled once at load and restored per turn;
@@ -130,7 +130,7 @@ class GlimmerBackend:
         self.max_tokens = max_tokens
         self.keep_cache = keep_cache
         self.verbose = verbose
-        self.think = think                       # True: unconstrained (model may reason) — diagnostics only
+        self.think = think                       # True: unconstrained (model may reason) - diagnostics only
         self.answer_max_tokens = answer_max_tokens
         self.force_first_tool = bool(force_first_tool) if force_first_tool is not None else False
         self.force_boilerplate = force_boilerplate
@@ -554,8 +554,8 @@ def _builtin_registry() -> dict:
 
 def registry() -> dict:
     """Named models. Read from $VOICE_MODELS (default $VOICE_HOME/models.json,
-    see models.example.json) — {"default": name, "models": [{name, label, family: glimmer|llama, model_dir?,
-    adapter?: dir|null, mode?: base|trained}]} — else a built-in list. Each model is `available` when its
+    see models.example.json) - {"default": name, "models": [{name, label, family: glimmer|llama, model_dir?,
+    adapter?: dir|null, mode?: base|trained}]} - else a built-in list. Each model is `available` when its
     weights (and adapter, if any) are on disk."""
     path = Path(os.environ.get("VOICE_MODELS") or DEFAULT_REGISTRY)
     try:

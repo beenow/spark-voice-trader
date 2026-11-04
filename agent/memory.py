@@ -197,7 +197,7 @@ _RANK_SAID = {r"\bpercent(?:age)?\b|\bpct\b": "pnl_pct",
 
 def resolve_followup(tool: str, args: dict, question: str, history: list) -> tuple[dict, list[str]]:
     """Fill arguments the follow-up left implicit, from the last frame. Returns (args, filled keys; "said:k" =
-    set from the question's own words — one side / one expiry named — which beat the model's value).
+    set from the question's own words - one side / one expiry named - which beat the model's value).
     Fills only what the model left OUT and the question does not state; the one override is an ordinal row
     reference ("the second strike"), which is resolved to that chain row's strike."""
     if not isinstance(args, dict) or not repairs_on():

@@ -49,11 +49,11 @@ and the puts?
 
 - `last_call=`: the last tool-calling turn among those 3, at most two calls joined by `; `. Each call is
   `agent.memory.call_text`: tool name, keys sorted, schema defaults dropped (except `side` and
-  `expiry_rule`), whole-number floats printed as ints. About 15–30 tokens.
+  `expiry_rule`), whole-number floats printed as ints. About 15-30 tokens.
 - `facts=`: pinned user facts (section 6), `; `-separated, at most 5.
 
-The line replaces nothing else: old turns stay as short spoken sentences (≈ 20–40 tokens each), so three turns of
-context add roughly 100–150 tokens to a ≈ 600-token prompt whose system part is cached.
+The line replaces nothing else: old turns stay as short spoken sentences (≈ 20-40 tokens each), so three turns of
+context add roughly 100-150 tokens to a ≈ 600-token prompt whose system part is cached.
 
 Training and inference produce this line from the same code. Training rows carry it as the last context
 entry's `state` (`agent.memory.context_entries`) with keys `[last_symbol, last_topic, last_call, facts]`, and
@@ -151,7 +151,7 @@ facts on the state line.
 
 | said (or sent) | effect | events |
 |---|---|---|
-| "start over", "forget everything", "clear the conversation", "new conversation", "reset" — or `{"type":"clear_memory"}` | all turns and facts deleted; the store file is removed | `memory_cleared` `scope: "all"`, then a code answer "Okay, starting fresh." (the WebSocket message gets only the event) |
+| "start over", "forget everything", "clear the conversation", "new conversation", "reset" - or `{"type":"clear_memory"}` | all turns and facts deleted; the store file is removed | `memory_cleared` `scope: "all"`, then a code answer "Okay, starting fresh." (the WebSocket message gets only the event) |
 | "forget that", "scratch that", "never mind" | the last turn removed, plus the fact it pinned | `memory_cleared` `scope: "last"`, then "Okay, I've forgotten that." |
 
 Commands are matched against the whole utterance, so "forget about Tesla puts" is an ordinary question. Command
@@ -159,7 +159,7 @@ turns are not added to history.
 
 ## 8. Multi-turn training traces (Muse Spark)
 
-1. **Dialogues.** A small grammar generates 2–4-turn dialogues over the mock universe. The
+1. **Dialogues.** A small grammar generates 2-4-turn dialogues over the mock universe. The
    first turn is a quote, chain, technicals, news, fundamentals or position question. Each follow-up is drawn
    from: pronoun tool switch, symbol switch, lookalike correction, side or expiry change, order from a chain
    (explicit strike, "those", "the second strike"), compare, what-if, repeat. Training and evaluation use two
@@ -203,7 +203,7 @@ is ever trained on.
 
 - Frame building, resolution, the reuse lookup and the store write are plain Python over a handful of dicts,
   far below 1 ms. The store write is one small JSON file per turn.
-- Three turns of context add roughly 100–150 prompt tokens, about 30 of them for `last_call=`. Only the new
+- Three turns of context add roughly 100-150 prompt tokens, about 30 of them for `last_call=`. Only the new
   tokens are prefilled, because the cached prefix covers the system prompt and tools.
 - A reused result skips the tool call. A code-handled command, fact or repeat skips the model entirely.
 

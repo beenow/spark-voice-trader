@@ -3,7 +3,7 @@
 CANONICAL TRAINED FORMAT (see FORMAT.md). Messages are OpenAI-shaped and rendered by the model's own
 chat_template.jinja with `tools=tools.schema()` and TEMPLATE_KWARGS:
 
-    system     SYSTEM_PROMPT (agent.loop) — the template appends "Reasoning strength: low." + tool schemas
+    system     SYSTEM_PROMPT (agent.loop) - the template appends "Reasoning strength: low." + tool schemas
     user/assistant pairs for the last <=3 turns (assistant content = that turn's SPOKEN answer)
     user       "[state: last_symbol=X, last_topic=Y]\\n" + question   (state line only when there is history)
     assistant  {"content": "", "tool_calls": [ONE call, arguments = a mapping]}   -> to=<tool> + <atem:...>
@@ -40,7 +40,7 @@ def trace_messages(question: str, steps: Sequence[Mapping[str, Any]], answer: st
                    history: Sequence[Any] | None = None) -> list[dict]:
     """Canonical messages for one turn.
 
-    steps: [{"tool": str, "args": {...}, "view": model_view dict}, ...] — one tool call per assistant message.
+    steps: [{"tool": str, "args": {...}, "view": model_view dict}, ...] - one tool call per assistant message.
     history: agent.loop.Turn objects (or TurnResults) for the previous turns.
     """
     from .loop import build_messages
@@ -193,7 +193,7 @@ def _llama_header(role: str) -> str:
 
 
 def llama_tools_text(tools: Sequence[Mapping[str, Any]]) -> str:
-    """Compact tool list: `name(arg, opt?=a|b, num:number): description` — about a quarter of the JSON schema."""
+    """Compact tool list: `name(arg, opt?=a|b, num:number): description` - about a quarter of the JSON schema."""
     lines = []
     for t in tools:
         f = t.get("function", t)
@@ -327,8 +327,7 @@ def regroup_calls(messages: Sequence[Mapping[str, Any]], sizes: Sequence[int]) -
 def llama_examples(messages: Sequence[Mapping[str, Any]], tokenizer,
                    tools: Sequence[Mapping[str, Any]] | None = None) -> list[tuple[list[int], int]]:
     """Training examples for one trace: (tokens, prompt_len) per assistant turn after the last user message
-    (history answers are context, never targets). Only tokens[prompt_len:] — the assistant body + <|eot_id|>
-    — are trained. The prompt is exactly what inference feeds (`LlamaPromptBuilder.tokens_for`)."""
+    (history answers are context, never targets). Only tokens[prompt_len:] - the assistant body + <|eot_id|> - are trained. The prompt is exactly what inference feeds (`LlamaPromptBuilder.tokens_for`)."""
     pb = LlamaPromptBuilder(tokenizer)
     last_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
     out = []

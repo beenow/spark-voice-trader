@@ -7,8 +7,8 @@
 never a digit); `raw` carries the slot values for logging and rendering only.
 
 Deterministic: the world is `mockmarket.World(seed, scenario)`. `seed` defaults
-to a stable hash of `row_id`, so every call for one row — across steps, retries
-and re-runs — sees the same market. Worlds are cached per (seed, scenario), so a
+to a stable hash of `row_id`, so every call for one row - across steps, retries
+and re-runs - sees the same market. Worlds are cached per (seed, scenario), so a
 row's later calls see what its earlier ones did (a drafted ticket, say).
 
 Run:  python -m uvicorn tools.server:app --host 127.0.0.1 --port 8040
