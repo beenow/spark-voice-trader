@@ -199,7 +199,7 @@ mkdir -p ~/.leaps-voice-agent/models ~/.leaps-voice-agent/adapters
 huggingface-cli download mlx-community/Llama-3.2-1B-Instruct-bf16 --local-dir ~/.leaps-voice-agent/models/Llama-3.2-1B-Instruct-bf16
 huggingface-cli download mlx-community/whisper-large-v3-turbo --local-dir ~/.leaps-voice-agent/models/whisper-large-v3-turbo
 huggingface-cli download prince-canuma/Kokoro-82M --local-dir ~/.leaps-voice-agent/models/Kokoro-82M
-huggingface-cli download <HF_REPO_ID> --local-dir ~/.leaps-voice-agent/adapters/llama-1b-loop
+huggingface-cli download leapsify/spark-voice-trader-llama-3.2-1b-lora --local-dir ~/.leaps-voice-agent/adapters/llama-1b-loop
 cp models.example.json ~/.leaps-voice-agent/models.json
 
 ./run.sh ask "How's my NVDA position, and is it near support?" "What about its RSI?"   # text only
@@ -244,7 +244,7 @@ and the test questions stay private; only aggregate scores are reported.
 ## Adapter weights
 
 The served adapter (`llama-1b-loop`, LoRA for Llama 3.2 1B Instruct) is published separately with a model card:
-**<HF_REPO_URL>** (link added at release). It is distributed under the Llama 3.2 Community License.
+**https://huggingface.co/leapsify/spark-voice-trader-llama-3.2-1b-lora**. It is distributed under the Llama 3.2 Community License.
 
 ## License
 
