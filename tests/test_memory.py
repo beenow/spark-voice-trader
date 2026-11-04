@@ -503,3 +503,9 @@ def test_stt_repairs_leaves_normal_questions():
 def test_stt_repairs_oracle():
     from agent.memory import stt_repairs
     assert stt_repairs("What's driving allocal today", []) == "What's driving Oracle today"
+
+
+def test_stt_repairs_was_driving():
+    from agent.memory import stt_repairs
+    assert stt_repairs("Was driving Oracle today", []) == "What's driving Oracle today"
+    assert stt_repairs("Was driving over a goal today", []) == "What's driving Oracle today"

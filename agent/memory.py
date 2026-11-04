@@ -172,14 +172,14 @@ _HEARD_PUTS = re.compile(r"\b(?:post|posts|puds|pots|putts)(?=\s*[?.!]?\s*$)", r
 
 
 # "Oracle" as the Fold heard it on Nov 4 ("What's driving allocal today" went to Tesla's news).
-_HEARD_ORACLE = re.compile(r"\b(?:allocal|alocal|oracal|orical|orakel)\b", re.I)
+_HEARD_ORACLE = re.compile(r"\b(?:allocal|alocal|oracal|orical|orakel|over\s+a\s+goal|or\s+a\s+call|all\s+a\s+call)\b", re.I)
 
 
 def stt_repairs(question: str, history: list | None = None) -> str:
     """Undo known speech-recognition mishears (see above) and "what driving X" -> "what's driving X"."""
     if not repairs_on():
         return question
-    q = re.sub(r"^(\s*)(w)hat\s+(driving|moving|happening)\b", r"\1\2hat's \3", question, flags=re.I)
+    q = re.sub(r"^(\s*)(?:what|was|whats)\s+(driving|moving|happening)\b", r"\1What's \2", question, flags=re.I)
     q = _HEARD_ORACLE.sub("Oracle", q)
     prev = getattr(history[-1], "frame", None) if history else None
     options = bool(prev and any(c["tool"] == "get_option_chain" for c in prev.get("calls", []))) \

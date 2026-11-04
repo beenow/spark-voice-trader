@@ -667,8 +667,10 @@ class MainActivity : Activity() {
                     return
                 }
                 if (!lastPartial.isNullOrBlank() && (releasedAt > 0 || convo)) { finishListening(lastPartial, "partial (error $code)"); return }
-                // Hands-free: the capture ended on silence (noise, a cough) with no words: just listen again.
-                if (convo && (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                // Hands-free: the capture ended (noise, a cough, our own "Sent.") with no words: just listen again.
+                // On the capture path the end of the pipe often comes back as ERROR_CLIENT (5), not NO_MATCH: that
+                // ended the whole conversation after an order was confirmed (Nov 4). Only mic/permission errors end it.
+                if (convo && code != SpeechRecognizer.ERROR_AUDIO && code != SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
                     mic?.let { it.stop(); mic = null }; finishListening(null, "nothing (error $code)"); return
                 }
                 listenDone = true
@@ -869,6 +871,17 @@ class MainActivity : Activity() {
         mic?.let { it.stop(); mic = null }
         recognizer?.cancel()
         finishListening(lastPartial, "silence ${SILENCE_MS}ms")
+    }
+
+    /** The app is about to speak on its own (not an answer): drop the open question without ending the
+     *  conversation, so the mic does not hear us; the speech's onDone reopens it. */
+    private fun pauseListening() {
+        if (!listening) return
+        listening = false; listenDone = true; releasedAt = 0
+        main.removeCallbacks(submitTurn)
+        mic?.let { it.stop(); mic = null }
+        closePipeRead()
+        recognizer?.cancel()
     }
 
     /** After an answer (or a turn with nothing to say): listen again while the conversation is on. */
