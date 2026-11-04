@@ -362,6 +362,7 @@ class MainActivity : Activity() {
 
     private fun onTicketConfirmed(tid: String) {
         android.util.Log.i("LeapsUi", "ticket $tid confirmed from the screen")
+        pauseListening()            // the mic must not hear our own "Sent." (it then ended the conversation)
         speak("Sent.", true)
     }
 
