@@ -1,9 +1,11 @@
 # Leaps Voice Agent
 
-A voice trading assistant that decides its own tool calls. You ask a question out loud (through Ray-Ban Meta
-glasses paired to a phone, or the phone itself), and a **Llama 3.2 1B** model running locally on a Mac Studio picks
-one to four tools, reads the results and speaks a short answer back, usually in under a second of model time. The
-model was taught by **Muse Spark**, which wrote the tool-call traces it was fine-tuned on.
+A voice trading assistant that decides its own tool calls and drives the app for you. You talk to it hands-free
+(through Ray-Ban Meta glasses paired to a phone, or the phone itself). A **Llama 3.2 1B** model, running **on the
+phone**, picks one to four tools, reads the results, speaks a short answer and opens the matching screen of a small
+trading app, **Leaps Trader**: the chart with the support line it just mentioned, the options chain on the strike it
+named, or a pre-filled order ticket for you to review and send. The model was taught by **Muse Spark**, which wrote
+the tool-call traces it was fine-tuned on. The same model also runs on a Mac behind a web page (`voice/`).
 
 Market data is synthetic on purpose. One seeded generator backs all 14 tools, so prices, positions, option
 chains and P&L are fake but consistent with each other. The point is to show that a small local model can choose
@@ -16,15 +18,19 @@ quotes and fills the answer, and those calls are marked `lane: "code: watchlist"
 
 ## The demo
 
-1. "How's my NVDA position, and is it near support?" The model calls `get_position` and `get_levels` in parallel.
-   The answer you hear: "You hold one hundred twenty-five shares at about one fifty-eight, up seventeen point two
-   percent… Yes, it's near support at about one eighty-three, just zero point eight percent away."
-2. "What about its RSI?" A follow-up. The ticker carries over: `get_indicators(NVDA, rsi)`.
-3. "Show me next week's Tesla calls." "And the puts?" "Buy two of the second strike." The chain, the same chain for
-   puts, then a ticket for two 415 puts that **needs confirmation**.
-4. "Should I buy Tesla?" No tool, no advice.
+One tap starts a conversation; after that you just talk (a question ends after a short pause, and the mic reopens
+when the answer has been spoken). In Leaps Trader:
 
-The phone page shows the live trace (each tool call, its result and the answer template) next to the spoken answer.
+| You say | Tools the model calls | What you hear | What the app shows |
+|---|---|---|---|
+| "How's my Nvidia position, and is it near support?" | `get_position` + `get_levels` (parallel) | "You hold one hundred twenty-five shares at about one fifty-eight, up seventeen point two percent... Yes, it's near support at about one eighty-three, just zero point eight percent away." | Nvidia: the position card while the first sentence plays, then the support line pulsing on the chart as the second starts |
+| "What about its RSI?" | `get_indicators(NVDA, rsi)`: the ticker carries over | "Nvidia's RSI is thirty-seven, neutral on the daily." | The RSI panel under the chart |
+| "Show me next week's Tesla calls." / "And the puts?" | `get_option_chain` twice | the strike with the most open interest, bid, ask, delta, IV | The options tab, next week's expiry, calls then puts, the strike highlighted |
+| "Buy two of the second strike." | `draft_order` | "I've drafted a ticket to buy two Tesla four fifteen puts expiring November sixth. It needs your confirmation." | A pre-filled order ticket. **You tap Confirm**; voice never sends an order |
+| "Show me my orders." | `get_orders` | the Tesla order | Activity, the order marked "via voice" |
+| "Which names on my watchlist are overbought?" | `screen_watchlist` | four names | Home, the matches highlighted in the watchlist |
+| "Should I buy Tesla?" | none | a decline and an offer of price, chart or news | stays put |
+| "What happens to my account if the market drops ten percent?" | `what_if(ALL, -10)` | about twenty-two thousand dollars lost | Home, positions |
 
 ## How it works
 
@@ -59,7 +65,8 @@ Diagrams and details:
 mockmarket/   seeded generator: ~57 tickers, 5-minute and daily bars, portfolio, Black-Scholes option chains, news, events
 tools/        14 tool schemas and implementations; slots, judgment words, display and spoken rendering
 agent/        loop, validator, model backends (Llama, Glimmer, scripted), slot filler, conversation memory, CLI
-voice/        FastAPI server, Whisper STT, Kokoro TTS, WebSocket, the phone page (voice/static/index.html)
+voice/        FastAPI server, Whisper STT, Kokoro TTS, WebSocket, the phone page (voice/static/index.html),
+              the step server for the Android app, and Leaps Trader's screens (ui_api.py, ui_static/)
 training/     trace schema, trace filters, renderer (traces -> Llama examples), LoRA config + trainer
 eval/         eval harness + a synthetic 20-question sample
 tests/        pytest
@@ -82,6 +89,22 @@ The same trained Llama 3.2 1B also runs **on the phone**. `android/` is a Kotlin
   full-precision MLX model.
 
 See [android/README.md](android/README.md) for the build and what runs where.
+
+## Leaps Trader: the agent drives the app
+
+The Android app is a small trading app (Home with the account, positions and watchlist; a symbol page with the chart,
+EMA 9/21/50, labelled support and resistance and an RSI panel, the position, news, fundamentals and an options tab;
+an order ticket; Activity). Its screens are a web view fed by the same mock market the tools read
+(`voice/ui_api.py`, `/ui/*` on the step server), so every number on screen matches the spoken one.
+
+- **Navigation comes from the tool calls, not from the model's words.** When a turn's tools have run, code maps them
+  to a screen (`nav_for`): `draft_order` opens the ticket, `get_option_chain` the options tab on that expiry, side and
+  strike, `get_levels` / `get_indicators` the chart with the line or panel asked about, `get_position` the position
+  card, `get_orders` Activity, `screen_watchlist` and `what_if` Home.
+- **Multi-part answers move with the voice.** For a turn with several tools, `nav_seq` ties each screen to the
+  sentence that speaks its numbers, and the app changes screen as that sentence starts playing.
+- **Orders stay tickets.** The ticket is pre-filled from the voice request; Confirm is a tap on the screen. In this
+  demo Confirm marks the mock ticket filled; there is no brokerage connection.
 
 ## In production (Leapsify)
 
