@@ -19,6 +19,7 @@ header .title { font-weight: 700; font-size: 17px; flex: 1; white-space: nowrap;
 header .acct { color: var(--muted); font-size: 13px; text-align: right; }
 main { padding: 12px 16px; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+.card { scroll-margin-top: 64px; }
 .card h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 .big { font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
 .up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); }
@@ -61,6 +62,7 @@ nav.tabbar button { flex: 1; background: none; border: 0; color: var(--muted); p
 nav.tabbar button.on { color: var(--accent); }
 nav.tabbar svg { display: block; margin: 0 auto 2px; }
 .news { padding: 9px 0; border-top: 1px solid var(--line); } .news:first-of-type { border-top: 0; }
+.card.compact { padding: 10px 14px; } .card.compact h3 { margin-bottom: 4px; } .card.compact .row { padding: 6px 0; }
 .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 4px 0 2px; }
 .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
 .legend .hl { color: var(--fg); font-weight: 700; }
@@ -144,10 +146,10 @@ function agentNote(byAgent, text) {
   return `<div class="agent ${byAgent ? "on" : ""}"><span class="dot"></span>${esc(text || "Opened by Leaps")}</div>`;
 }
 
-function flash(id) {
+function flash(id, scroll = true, block = "center") {
   const el = document.getElementById(id);
   if (!el) return;
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (scroll) el.scrollIntoView({ behavior: "smooth", block });
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 
@@ -273,9 +275,14 @@ async function renderSymbol(nav) {
   $("acct").innerHTML = `${money(d.price)}`;
   const tab = nav.tab || "overview";
   const focus = nav.byAgent ? chartFocus(nav) : [];
+  // a position question shows the position card; with a technical call too, compactly ABOVE the chart, both lit
+  const posFirst = nav.byAgent && (nav.sections || []).includes("position") && d.positions.length > 0;
+  const posCard = (compact) => d.positions.length ? `<div class="card${compact ? " compact" : ""}" id="sec-position"><h3>Your position</h3>${d.positions.map((p) => `<div class="row"><div class="l"><div class="sym">${esc(p.label)}</div>
+        <div class="sub">${p.qty} ${p.kind === "option" ? "contracts" : "shares"} · avg ${money(p.avg_cost)}</div></div>
+        <div class="r"><div>${money(p.value, 0)}</div><div class="${cls(p.pnl)}" style="font-size:12.5px">${smoney(p.pnl)} (${pct(p.pnl_pct)})</div></div></div>`).join("")}</div>` : "";
   if (nav.byAgent && focus.length) S.chart = ["1H", "5m"].includes(nav.timeframe) ? "1D" : "3M";   // match the call
   const rng = S.chart in d.chart ? S.chart : "1D";
-  const head = `${agentNote(nav.byAgent)}
+  const head = `${agentNote(nav.byAgent)}${posFirst ? posCard(focus.length > 0) : ""}
     <div class="card" id="sec-chart"><div class="muted" style="font-size:13px">${esc(d.name)}</div>
       <div class="big">${money(d.price)}</div><div class="${cls(d.change_pct)}" style="font-weight:600">${pct(d.change_pct)} today</div>
       <div style="margin:10px -4px 4px">${d.quote_only ? chart(d.chart[rng].c, [{ v: d.prev_close, c: "#8796a8", t: "prev" }], d.change_pct >= 0) : techChart(d, rng, focus)}</div>
@@ -287,9 +294,7 @@ async function renderSymbol(nav) {
     body = await optionsBody(d, nav);
   } else if (!d.quote_only) {
     const ind = d.indicators, lv = d.levels, f = d.fundamentals;
-    const posHtml = d.positions.length ? `<div class="card" id="sec-position"><h3>Your position</h3>${d.positions.map((p) => `<div class="row"><div class="l"><div class="sym">${esc(p.label)}</div>
-        <div class="sub">${p.qty} ${p.kind === "option" ? "contracts" : "shares"} · avg ${money(p.avg_cost)}</div></div>
-        <div class="r"><div>${money(p.value, 0)}</div><div class="${cls(p.pnl)}" style="font-size:12.5px">${smoney(p.pnl)} (${pct(p.pnl_pct)})</div></div></div>`).join("")}</div>` : "";
+    const posHtml = posFirst ? "" : posCard(false);
     body = `${posHtml}
       <div class="card" id="sec-news"><h3>News · <span class="tag ${d.news.tone === "positive" ? "good" : d.news.tone === "negative" ? "bad" : ""}">${d.news.tone}</span></h3>
         ${d.news.items.map((n) => `<div class="news"><div>${esc(n.headline)}</div><div class="sub">${n.age_hours < 1 ? "under an hour" : Math.round(n.age_hours) + "h"} ago</div></div>`).join("")}</div>
@@ -312,6 +317,7 @@ async function renderSymbol(nav) {
   $("view").innerHTML = head + body + trade;
   if (nav.byAgent) {
     if (tab === "options") flash("sec-options");
+    else if (posFirst) { if (focus.length) flash("sec-chart", false); flash("sec-position", true, "start"); }
     else if (focus.length) flash(focus.length === 1 && focus[0] === "rsi" ? "sec-rsi" : "sec-chart");
     else flash("sec-" + ((nav.sections || []).find((s) => s !== "chart" && s !== "indicators" && s !== "levels") || "chart"));
   }
@@ -417,9 +423,22 @@ window.UI = {
 function alertBox(e) { $("view").insertAdjacentHTML("afterbegin", `<div class="card err">${esc(e.message)}</div>`); }
 
 // Called by the app: the agent's screen for this turn ({screen, ...} from the step server's "nav").
+// Self-update: when the page on the server has changed, reload it and then show the agent's screen, so a page
+// fix reaches a running app on its next turn (the app loads the page only at launch). 1-byte ranged GET.
+let pageTag = null;
+const tagOf = () => fetch("/ui/app/index.html", { cache: "no-store", headers: { Range: "bytes=0-0" } })
+  .then((r) => r.headers.get("etag")).catch(() => null);
+tagOf().then((t) => { pageTag = t; });
+
 window.LeapsUI = {
-  nav(n) {
+  async nav(n) {
     if (!n || !RENDER[n.screen]) return;
+    const t = await tagOf();
+    if (t && pageTag && t !== pageTag) {
+      try { sessionStorage.setItem("pendingNav", JSON.stringify(n)); } catch (e) { /* storage off: just reload */ }
+      location.reload();
+      return;
+    }
     if (S.cur && JSON.stringify({ ...S.cur, byAgent: 0, keepScroll: 0 }) !== JSON.stringify({ ...n, byAgent: 0, keepScroll: 0 })) S.stack.push(S.cur);
     if (n.screen === "home" || n.screen === "activity") S.stack = [];
     show({ ...n, byAgent: true });
@@ -428,7 +447,12 @@ window.LeapsUI = {
   reset(session) { if (session) S.session = session; S.stack = []; show({ screen: "home", byAgent: false }); },
   back() { if (!S.stack.length) return false; UI.back(); return true; },
 };
-show({ screen: "home" }).then(() => { if (P.get("nav")) LeapsUI.nav(JSON.parse(P.get("nav"))); });   // nav=: preview hook
+let pending = null;
+try { pending = sessionStorage.getItem("pendingNav"); sessionStorage.removeItem("pendingNav"); } catch (e) { /* none */ }
+show({ screen: "home" }).then(() => {
+  if (pending) LeapsUI.nav(JSON.parse(pending));            // the screen that triggered a self-update
+  else if (P.get("nav")) LeapsUI.nav(JSON.parse(P.get("nav")));   // nav=: preview hook
+});
 </script>
 </body>
 </html>
