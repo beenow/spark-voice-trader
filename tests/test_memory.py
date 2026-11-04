@@ -473,3 +473,16 @@ def test_those_means_the_priced_row():
             "result": {"ok": True, "slots": {"strike_1": 410.0, "strike_2": 415.0, "strike_3": 420.0}, "words": {}}}]
     fr = build_frame("q", calls, SlotBook(), "Strikes run {strike_1} to {strike_3}; row two at {strike_2} is {bid_2} bid, {ask_2} ask.", "", res)
     assert fr["option"]["said_strike"] == 415
+
+
+def test_stt_repairs_options_mishears():
+    from agent.memory import stt_repairs
+
+    class T:
+        frame = {"calls": [{"tool": "get_option_chain", "args": {}}]}
+
+    assert stt_repairs("Show me next week's Tesla cost", []) == "Show me next week's Tesla calls"
+    assert stt_repairs("And the post", [T()]) == "And the puts"
+    assert stt_repairs("And the post", []) == "And the post"                       # no options context
+    assert stt_repairs("What's the cost of my position", []) == "What's the cost of my position"
+    assert stt_repairs("What driving oracle today", []) == "What's driving oracle today"

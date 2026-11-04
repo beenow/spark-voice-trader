@@ -18,7 +18,6 @@ import android.speech.tts.TextToSpeech
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
@@ -129,6 +128,11 @@ class MainActivity : Activity() {
         if (store.installed(modelPref()) != null) loadModel()
         else if (passField.text.isNotEmpty()) setupModel()          // passcode already entered once: fetch it
         else { showSetup(true); setStatus("Setup: server + passcode, then Get model") }
+    }
+
+    override fun onStop() {
+        if (convo) endConversation()          // never keep the mic open in the background
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -254,15 +258,9 @@ class MainActivity : Activity() {
             val q = askField.text.toString().trim()
             if (q.isNotEmpty()) { askField.setText(""); runTurn(q) }
         }
-        talk = label("Hold to talk", 22f, Color.rgb(8, 30, 18), true).apply {
+        talk = label(TAP_LABEL, 22f, Color.rgb(8, 30, 18), true).apply {
             gravity = Gravity.CENTER; background = rounded(phone, 40)
-            setOnTouchListener { _, ev ->
-                when (ev.action) {
-                    MotionEvent.ACTION_DOWN -> startListening()
-                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> stopListening()
-                }
-                true
-            }
+            setOnClickListener { tapTalk("tap") }
         }
         val askRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(8), 0, dp(10))
@@ -487,11 +485,11 @@ class MainActivity : Activity() {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, "en-US")
         putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        // Push-to-talk: ONLY the release ends the utterance. Long silence windows so a pause while the button is
-        // held does not end it (300 ms cut "Anything that stops bleeding" at "Anything that stopped"); if the
-        // recognizer still ends early while held, onResults restarts it and keeps the text (heldText).
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 10_000L)
-        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 10_000L)
+        // Hands-free: OUR SILENCE_MS timer ends the turn (bumpSubmit), not the recognizer. These extras are only
+        // advisory (some builds ignore them); when the recognizer ends a segment early, onResults banks the text
+        // (heldText) and listens on, so a pause mid-question ("Anything that ... stops bleeding") is not a cut.
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
+        putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SILENCE_MS)
     }
 
     private fun ensureRecognizer(): SpeechRecognizer? {
@@ -506,8 +504,8 @@ class MainActivity : Activity() {
             note("no speech recognizer on this device: type instead"); return null
         }
         r.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(p: Bundle?) { talk.text = "Listening…" }
-            override fun onBeginningOfSpeech() {}
+            override fun onReadyForSpeech(p: Bundle?) { audioErrors = 0; if (heldText.isEmpty()) talk.text = LISTEN_LABEL }
+            override fun onBeginningOfSpeech() { bumpSubmit() }
             override fun onRmsChanged(v: Float) {}
             override fun onBufferReceived(b: ByteArray?) {}
             override fun onEndOfSpeech() {}
@@ -528,6 +526,7 @@ class MainActivity : Activity() {
                     }
                     segPartial = it
                     val t = joinHeld(it); talk.text = t; lastPartial = t
+                    bumpSubmit()
                 }
             }
             override fun onResults(p: Bundle?) {
@@ -540,7 +539,8 @@ class MainActivity : Activity() {
                     heldText = joinHeld(got ?: segPartial); segPartial = ""
                     android.util.Log.i("LeapsStt", "ended early while held; keep '$heldText' and restart")
                     lastPartial = heldText
-                    recognizer?.startListening(recognizerIntent())
+                    if (heldText.isNotEmpty()) bumpSubmit()
+                    restartRecognition()
                     return
                 }
                 val q = got?.let { joinHeld(it) } ?: lastPartial
@@ -549,15 +549,32 @@ class MainActivity : Activity() {
             override fun onError(code: Int) {
                 if (listenDone) return            // a partial already started the turn
                 if (stillHeld() && (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
-                    android.util.Log.i("LeapsStt", "error $code while held: restart")
-                    recognizer?.startListening(recognizerIntent()); return
+                    android.util.Log.i("LeapsStt", "error $code while listening: restart")
+                    restartRecognition(); return
                 }
-                if (!lastPartial.isNullOrBlank() && releasedAt > 0) { finishListening(lastPartial, "partial (error $code)"); return }
+                // Busy, or the mic not opening (3: often the mic still settling after playback): a fresh recognizer
+                // after RESTART_MS, once for audio; a second audio error in a row ends the conversation.
+                if (stillHeld() && (code == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ||
+                            (code == SpeechRecognizer.ERROR_AUDIO && audioErrors++ == 0))) {
+                    android.util.Log.i("LeapsStt", "error $code while listening: new recognizer")
+                    recognizer?.destroy(); recognizer = null
+                    val press = pressId
+                    main.postDelayed({ if (press == pressId && stillHeld()) { ensureRecognizer(); restartRecognition() } }, RESTART_MS)
+                    return
+                }
+                if (!lastPartial.isNullOrBlank() && (releasedAt > 0 || convo)) { finishListening(lastPartial, "partial (error $code)"); return }
+                // Hands-free: the capture ended on silence (noise, a cough) with no words: just listen again.
+                if (convo && (code == SpeechRecognizer.ERROR_NO_MATCH || code == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
+                    mic?.let { it.stop(); mic = null }; finishListening(null, "nothing (error $code)"); return
+                }
                 listenDone = true
                 listening = false
+                convo = false
+                main.removeCallbacks(submitTurn)
                 mic?.let { it.stop(); mic = null }
                 if (glassesTurn) { glassesTurn = false; Thread { glasses.release("stt error $code") }.start() }
-                talk.text = "Hold to talk"
+                talk.text = TAP_LABEL
+                if (code == SpeechRecognizer.ERROR_AUDIO) { note("the microphone isn't picking anything up (error 3): is another app or a call using it?"); return }
                 if (useOnDeviceStt && (code == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                             code == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE ||
                             code == SpeechRecognizer.ERROR_SERVER_DISCONNECTED)) {
@@ -589,7 +606,7 @@ class MainActivity : Activity() {
         pressId++
         listenStart = SystemClock.elapsedRealtime()
         val g = glasses.device
-        if (g != null && prefs.getBoolean("glasses_mic", true) || prefs.getBoolean("mic_capture", false)) {
+        if (g != null && prefs.getBoolean("glasses_mic", true) || prefs.getBoolean("mic_capture", true)) {
             glassesListen(r, g, pressId)
             return
         }
@@ -618,30 +635,25 @@ class MainActivity : Activity() {
             ui {
                 if (press != pressId || !listening || releasedAt > 0) {      // released while the link came up
                     glasses.release("press ended before link")
-                    listening = false; listenDone = true; releasedAt = 0; talk.text = "Hold to talk"
-                    note("released before the glasses link was up (${linkMs} ms): hold a little longer")
+                    listening = false; listenDone = true; releasedAt = 0; talk.text = TAP_LABEL
+                    note("stopped before the glasses link was up (${linkMs} ms)")
                     return@ui
                 }
                 val pipe = android.os.ParcelFileDescriptor.createPipe()
-                val m = GlassesAudio.MicStream(if (g != null) glasses.inputDevice else null, pipe[1]) {
+                val m = GlassesAudio.MicStream(if (g != null) glasses.inputDevice else null, pipe[1], VAD_SILENCE_MS) {
                     ui { if (press == pressId && listening) stopListening() }     // hands-free: silence ends it
                 }
                 runCatching { m.start() }.onFailure {
                     note("glasses mic failed: ${it.message}"); glasses.release("mic failed")
-                    listening = false; talk.text = "Hold to talk"; return@ui
+                    listening = false; convo = false; talk.text = TAP_LABEL; return@ui
                 }
                 mic = m
                 pipeSource = true
                 glassesTurn = g != null
                 sttOnDevice = true
-                talk.text = if (g != null) "Listening on glasses…" else "Listening…"
+                talk.text = if (g != null) "Listening on glasses…" else LISTEN_LABEL
                 note("mic: ${m.routed}" + if (g != null) " · link ${if (linkMs >= 0) "$linkMs ms" else "failed"}" else "")
-                r.startListening(recognizerIntent().apply {
-                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, pipe[0])
-                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
-                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
-                    putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, GlassesAudio.MicStream.RATE)
-                })
+                r.startListening(pipeIntent(pipe[0]))
             }
         }.start()
     }
@@ -698,8 +710,65 @@ class MainActivity : Activity() {
         if (now - lastToggle < 400) return                 // a tap can arrive as both a key and onPlay/onPause
         lastToggle = now
         GlassesAudio.log("ptt toggle from $src (listening=$listening)")
-        if (listening) stopListening() else startListening()
+        tapTalk(src)
     }
+
+    // ================================================================ hands-free conversation (as the Leaps assistant)
+    /**
+     * Conversation mode: one tap starts it; each question ends after SILENCE_MS without new words, and the mic
+     * reopens by itself once the answer has been spoken. Half duplex like the Leapsify app (the recognizer would
+     * transcribe our own voice), so "talking over" the answer is a tap: it cuts the answer and listens.
+     *   idle -> start · listening, nothing heard -> stop · listening, words heard -> send now
+     *   speaking -> cut the answer and listen · thinking -> stop after this answer
+     */
+    @Volatile private var convo = false
+    private var lastSpeechAt = 0L
+    private var audioErrors = 0
+
+    private fun tapTalk(src: String) {
+        android.util.Log.i("LeapsStt", "tap from $src: convo=$convo listening=$listening busy=$busy speaking=$speaking")
+        when {
+            listening && !lastPartial.isNullOrBlank() -> { main.removeCallbacks(submitTurn); stopListening() }
+            listening -> endConversation()
+            busy -> { endConversation(); talk.text = "Stopping after this answer" }
+            speaking > 0 -> { convo = true; startListening() }      // startListening stops the speaker
+            else -> { convo = true; startListening() }
+        }
+    }
+
+    private fun endConversation() {
+        convo = false
+        main.removeCallbacks(submitTurn)
+        if (listening) {
+            listening = false; listenDone = true; releasedAt = 0
+            mic?.let { it.stop(); mic = null }
+            recognizer?.cancel()
+            if (glassesTurn) { glassesTurn = false; Thread { glasses.release("conversation ended") }.start() }
+        }
+        speaker.stop()
+        talk.text = TAP_LABEL
+    }
+
+    /** New words: the turn ends SILENCE_MS after the last of them. */
+    private fun bumpSubmit() {
+        if (!convo || !listening || listenDone) return
+        lastSpeechAt = SystemClock.elapsedRealtime()
+        main.removeCallbacks(submitTurn)
+        main.postDelayed(submitTurn, SILENCE_MS)
+    }
+
+    private val submitTurn = Runnable {
+        if (!listening || listenDone || lastPartial.isNullOrBlank()) return@Runnable
+        releasedAt = lastSpeechAt               // timing: from the last word heard
+        mic?.let { it.stop(); mic = null }
+        recognizer?.cancel()
+        finishListening(lastPartial, "silence ${SILENCE_MS}ms")
+    }
+
+    /** After an answer (or a turn with nothing to say): listen again while the conversation is on. */
+    private fun resumeConversation() = main.postDelayed({
+        if (convo && !listening && !busy && speaking == 0) startListening()
+    }, RESTART_MS)
 
     private var releasedAt = 0L
     @Volatile private var sttFinalMs = -1L
@@ -710,8 +779,26 @@ class MainActivity : Activity() {
     @Volatile private var heldText = ""
     @Volatile private var segPartial = ""
 
-    /** Button still down (not released), on the plain recognizer path (the PCM-pipe path cannot be restarted). */
-    private fun stillHeld() = listening && releasedAt == 0L && !pipeSource && !listenDone
+    /** Still taking this question (not sent yet), on the plain recognizer path (the PCM-pipe path cannot be restarted). */
+    private fun stillHeld() = listening && releasedAt == 0L && !listenDone && (!pipeSource || mic != null)
+
+    /** The recognizer ended a segment while we are still taking the question: start its next session. On the
+     *  capture path the same MicStream feeds the new session's pipe (nothing said in between is lost). */
+    private fun restartRecognition() {
+        val r = recognizer ?: return
+        val m = mic
+        if (!pipeSource || m == null) { r.startListening(recognizerIntent()); return }
+        val pipe = android.os.ParcelFileDescriptor.createPipe()
+        m.swap(pipe[1])
+        r.startListening(pipeIntent(pipe[0]))
+    }
+
+    private fun pipeIntent(src: android.os.ParcelFileDescriptor) = recognizerIntent().apply {
+        putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, src)
+        putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, 1)
+        putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT)
+        putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, GlassesAudio.MicStream.RATE)
+    }
     @Volatile private var pipeSource = false
 
     private fun joinHeld(t: String) = listOf(heldText, t.trim()).filter { it.isNotEmpty() }.joinToString(" ")
@@ -736,12 +823,13 @@ class MainActivity : Activity() {
     private fun finishListening(text: String?, kind: String) {
         if (listenDone) return
         listenDone = true
+        main.removeCallbacks(submitTurn)
         sttFinalMs = if (releasedAt > 0) SystemClock.elapsedRealtime() - releasedAt else -1
         sttKind = kind
         turnReleaseAt = releasedAt
         releasedAt = 0
         listening = false
-        talk.text = "Hold to talk"
+        talk.text = if (convo) "Thinking…" else TAP_LABEL
         lastMicGlasses = glassesTurn
         if (glassesTurn) {
             glassesTurn = false
@@ -751,7 +839,7 @@ class MainActivity : Activity() {
             Thread { glasses.release("turn heard") }.start()
         }
         val q = text?.trim()
-        if (!q.isNullOrEmpty()) runTurn(q, fromVoice = true) else note("heard nothing")
+        if (!q.isNullOrEmpty()) runTurn(q, fromVoice = true) else { note("heard nothing"); resumeConversation() }
     }
     @Volatile private var sttKind = "final"
 
@@ -760,13 +848,13 @@ class MainActivity : Activity() {
     private fun speak(s: String, flush: Boolean, answer: Boolean = false, mute: Boolean = false,
                       onSynthDone: (() -> Unit)? = null,
                       onFinished: ((ttfaMs: Long, voices: Set<String>) -> Unit)? = null) {
-        if (s.isBlank()) { onFinished?.invoke(-1, emptySet()); return }
+        if (s.isBlank()) { onFinished?.invoke(-1, emptySet()); resumeConversation(); return }
         speakingCount.incrementAndGet()
         val used = mutableSetOf<String>()
         var first = -1L
         speaker.speak(s, flush, mute = mute, onSynthDone = onSynthDone,
             onFirstAudio = { ms, voice -> first = ms
-                if (answer) ui { ttfa.text = "$ms" }
+                if (answer) ui { ttfa.text = "$ms"; if (convo && !listening) talk.text = "Speaking… tap to cut in" }
                 if (answer && turnReleaseAt > 0) {
                     val e2e = SystemClock.elapsedRealtime() - turnReleaseAt
                     turnReleaseAt = 0
@@ -786,6 +874,7 @@ class MainActivity : Activity() {
                 }
                 speakingCount.decrementAndGet()
                 onFinished?.invoke(first, v)
+                resumeConversation()
             })
     }
 
@@ -902,6 +991,7 @@ class MainActivity : Activity() {
             } finally {
                 busy = false
                 ui { talk.alpha = 1f }
+                resumeConversation()      // no-op while the answer is still being spoken (its onDone resumes)
             }
         }
     }
@@ -1032,6 +1122,14 @@ class MainActivity : Activity() {
     private fun JSONArray.toIntArray() = IntArray(length()) { getInt(it) }
 
     companion object {
+        /** End of a question: this long without new words (the Leapsify assistant's 2 s, kept equal to iOS). */
+        private const val SILENCE_MS = 2_000L
+        /** Our own end of speech on the capture path (MicStream RMS): quiet this long after speech sends it. */
+        private const val VAD_SILENCE_MS = 1_500L
+        /** Recognizer re-creation / reopen-after-speech delay (avoids ERROR_RECOGNIZER_BUSY and the playback tail). */
+        private const val RESTART_MS = 250L
+        private const val TAP_LABEL = "Tap to talk"
+        private const val LISTEN_LABEL = "Listening… tap to stop"
         private val PTT_KEYS = setOf(android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, android.view.KeyEvent.KEYCODE_HEADSETHOOK,
             android.view.KeyEvent.KEYCODE_MEDIA_PLAY, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE)
 

@@ -1,6 +1,6 @@
 # Leaps on-device (Android)
 
-A push-to-talk voice trading agent whose language model, a fine-tuned **Llama 3.2 1B**, runs **on the
+A hands-free voice trading agent whose language model, a fine-tuned **Llama 3.2 1B**, runs **on the
 phone** (llama.cpp, CPU, arm64). Built for a hackathon demo on a Galaxy Z Fold.
 
 ## What runs where (honest version)
@@ -39,9 +39,11 @@ headset, a "Glasses · <name>" badge appears and:
   the glasses) and streams the PCM into the on-device recognizer (`EXTRA_AUDIO_SOURCE`). The system recognizer
   does not reliably follow the Bluetooth route on its own, so the app does not rely on it. The log shows the
   device the capture was really routed to.
-- **Hands-free:** tap the glasses' touchpad (it arrives as play/pause or headset-hook on a MediaSession) to start
-  listening. Tap again to stop, or just stop talking: 0.9 s of silence after speech ends the turn. Holding the
-  on-screen button works too.
+- **Hands-free:** one tap (the on-screen button, or the glasses' touchpad, which arrives as play/pause or
+  headset-hook on a MediaSession) starts a conversation. A question ends after 2 s without new words, and the mic
+  reopens by itself once the answer has been spoken, like the Leaps assistant in the Leapsify app. It is half
+  duplex: to talk over an answer, tap (the answer stops and the app listens). Tap while listening sends what was
+  heard at once, or ends the conversation if nothing was heard yet.
 - **Speaker:** with Glasses mode OFF (the default), the Bluetooth call link (SCO/LE) is brought up only while
   listening and dropped as soon as the words are in. The answer then plays as media (A2DP) on the glasses in full
   quality. With Glasses mode ON (Setup), the link stays up for the whole session: no per-turn switch-on cost

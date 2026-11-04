@@ -120,12 +120,34 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
     /**
      * Microphone capture from [input] (the glasses, or the phone mic when null) streamed into [sink] as 16 kHz
      * 16-bit mono PCM. Ends on [stop], or by itself after [silenceMs] of quiet that follows speech (hands-free).
+     *
+     * The capture keeps running across recognizer sessions: when the recognizer ends a segment early, [swap] hands
+     * the stream to the next session's pipe and replays the last [REPLAY_MS] first, so words said while the next
+     * session starts are not lost (with the recognizer's own mic, "What is Oracle today" came out "What is Call today").
      */
-    class MicStream(private val input: AudioDeviceInfo?, private val sink: ParcelFileDescriptor,
+    class MicStream(private val input: AudioDeviceInfo?, sink: ParcelFileDescriptor,
                     private val silenceMs: Long = 900, private val onAutoEnd: () -> Unit) {
         @Volatile private var running = true
         private var thread: Thread? = null
         @Volatile var routed: String = "?"; private set
+        private val lock = Any()
+        private var out: java.io.OutputStream? = ParcelFileDescriptor.AutoCloseOutputStream(sink)
+        private val recent = ArrayDeque<ByteArray>()      // the last REPLAY_MS, for the next session
+
+        /** The next recognizer session's pipe: it gets the last REPLAY_MS, then the live audio. */
+        fun swap(sink: ParcelFileDescriptor) = synchronized(lock) {
+            out?.let { runCatching { it.close() } }
+            val o = ParcelFileDescriptor.AutoCloseOutputStream(sink)
+            out = runCatching { recent.forEach { o.write(it) }; o }.getOrElse { runCatching { o.close() }; null }
+            log("capture: next recognizer session (replayed ${recent.size * 20} ms)")
+        }
+
+        private fun push(b: ByteArray, n: Int) = synchronized(lock) {
+            recent.addLast(b.copyOf(n)); while (recent.size > REPLAY_MS / 20) recent.removeFirst()
+            val o = out ?: return@synchronized
+            // The session ended and closed its end (EPIPE): keep capturing; swap() starts the next one.
+            runCatching { o.write(b, 0, n) }.onFailure { runCatching { o.close() }; out = null }
+        }
 
         @SuppressLint("MissingPermission")    // RECORD_AUDIO is checked before a capture starts
         fun start() {
@@ -137,7 +159,6 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
             routed = rec.routedDevice?.let { name(it) } ?: "default mic"
             log("capture: preferred ${input?.let { name(it) } ?: "phone mic"}, routed to $routed")
             thread = Thread({
-                val out = ParcelFileDescriptor.AutoCloseOutputStream(sink)
                 val buf = ShortArray(RATE / 50)                 // 20 ms
                 val bytes = ByteArray(buf.size * 2)
                 var heard = false
@@ -152,7 +173,7 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
                             val v = buf[i].toInt(); sum += v * v
                             bytes[2 * i] = (v and 0xff).toByte(); bytes[2 * i + 1] = (v shr 8 and 0xff).toByte()
                         }
-                        out.write(bytes, 0, n * 2)
+                        push(bytes, n * 2)
                         val rms = sqrt(sum / n)
                         peak = maxOf(peak, rms)
                         val now = SystemClock.elapsedRealtime()
@@ -165,7 +186,7 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
                 } catch (e: Exception) {
                     log("capture stopped: ${e.message}")
                 } finally {
-                    runCatching { rec.stop() }; rec.release(); runCatching { out.close() }
+                    runCatching { rec.stop() }; rec.release(); synchronized(lock) { out?.let { runCatching { it.close() } }; out = null }
                     log("capture closed (peak rms ${peak.toInt()}, speech ${if (heard) "heard" else "NOT heard"})")
                 }
             }, "glasses-mic").apply { start() }
@@ -176,6 +197,7 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
         companion object {
             const val RATE = 16_000
             const val SPEECH_RMS = 700.0
+            const val REPLAY_MS = 700
         }
     }
 

@@ -162,6 +162,29 @@ def repairs_on() -> bool:
     return os.environ.get("VOICE_REPAIRS", "1") != "0"
 
 
+# Phone speech recognition mishears in an options conversation (seen on the Fold, Nov 4): "Tesla calls" ->
+# "Tesla cost", "and the puts" -> "and the post" (which then went to get_news). Only rewritten when the turn is about
+# options: the previous turn showed a chain or drafted an option, or this question names an expiry or a strike.
+_OPTION_TALK = re.compile(r"\b(?:next\s+week'?s?|this\s+week'?s?|weekly|weeklies|monthly|expir\w*|strikes?|"
+                          r"chain|options?|calls?|puts?)\b", re.I)
+_HEARD_CALLS = re.compile(r"\b(?:cost|costs|cause|cars|coals|colds|cols)\b", re.I)
+_HEARD_PUTS = re.compile(r"\b(?:post|posts|puds|pots|putts|put's)\b", re.I)
+
+
+def stt_repairs(question: str, history: list | None = None) -> str:
+    """Undo known speech-recognition mishears (see above) and "what driving X" -> "what's driving X"."""
+    if not repairs_on():
+        return question
+    q = re.sub(r"^(\s*)(w)hat\s+(driving|moving|happening)\b", r"\1\2hat's \3", question, flags=re.I)
+    fr = last_frame(history or [])
+    options = bool(fr and any(c["tool"] in ("get_option_chain", "draft_order") for c in fr.get("calls", []))) \
+        or bool(_OPTION_TALK.search(q))
+    if options:
+        q = _HEARD_CALLS.sub("calls", q)
+        q = _HEARD_PUTS.sub("puts", q)
+    return q
+
+
 _RANK_SAID = {r"\bpercent(?:age)?\b|\bpct\b": "pnl_pct",
               r"\bby\s+weight\b|\b(?:largest|biggest)\s+(?:holding|position)s?\b|\bconcentrat": "weight",
               r"\b(?:moved|moving|movers?)\b.*\btoday\b|\btoday'?s?\s+(?:biggest\s+)?movers?\b": "day_move"}
@@ -612,6 +635,10 @@ class Conversation:
         """`run(question, history, facts)` -> TurnResult. `history` overrides the conversation's (compare lane 1)."""
         emit = on_event or (lambda e: None)
         gen = self.gen
+        fixed = stt_repairs(question, self.history if history is None else history)
+        if fixed != question:
+            emit({"type": "stt_repair", "heard": question, "used": fixed})
+            question = fixed
         cmd = memory_command(question)
         if cmd in ("all", "last"):
             if record:
