@@ -62,7 +62,7 @@ class SlotBook:
 
 
 _ROWSLOT = r"_[1-5](?:_\d+)?"
-_BIDASK = re.compile(r"\{(bid" + _ROWSLOT + r")\}\s*(?:by|/|x|×|,|-|–|and|to|over)\s*\{(ask" + _ROWSLOT + r")\}", re.I)
+_BIDASK = re.compile(r"\{(bid" + _ROWSLOT + r")\}\s*(?:by|/|x|×|,|-|\u2013|and|to|over)\s*\{(ask" + _ROWSLOT + r")\}", re.I)
 _DELTA = re.compile(r"\{(delta" + _ROWSLOT + r")\}")
 _IV = re.compile(r"(\s+at\s+)?\{(iv" + _ROWSLOT + r")\}")
 

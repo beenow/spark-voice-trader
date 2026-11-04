@@ -180,7 +180,7 @@ class MainActivity : Activity() {
     }
 
     private fun metric(caption: String): Pair<LinearLayout, TextView> {
-        val value = label("–", 26f, fg, true)
+        val value = label("-", 26f, fg, true)
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER
             background = rounded(card, 14, line); setPadding(dp(8), dp(10), dp(8), dp(10))

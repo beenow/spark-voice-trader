@@ -77,7 +77,7 @@ The same trained Llama 3.2 1B also runs **on the phone**. `android/` is a Kotlin
 - **On the Mac (`voice/step_server.py`):** prompt rendering, the code checks, slot filling, memory and the tools.
   The phone only generates, so every check is the same code that was evaluated.
 - **Speed:** the fixed system+tools prefix (577 tokens) is prefilled once and its KV cache saved, so a turn only
-  prefills the new tokens. Model time is about 1 s per turn, with the demo voice's first audio 0.7–1.0 s later.
+  prefills the new tokens. Model time is about 1 s per turn, with the demo voice's first audio 0.7-1.0 s later.
 - **Quality:** the 4-bit GGUF scores 90.8 tool_set / 89.1 args on the test split, against 90.8 / 89.9 for the
   full-precision MLX model.
 
@@ -204,7 +204,7 @@ How the student was made (diagram: [docs/training.html](docs/training.html); det
    (`training/render.py`, checked in `tests/test_format_parity.py`).
 5. LoRA on Llama 3.2 1B with MLX on the Mac Studio (`training/lora_config.yaml`), then the eval gate above.
 
-## Built during the hackathon (Oct 26 – Nov 4, 2026)
+## Built during the hackathon (Oct 26 - Nov 4, 2026)
 
 Everything in this repository was written during the hackathon: the mock market, the 14 tools, the agent loop and
 validator, the Llama and Glimmer backends, the prompt formats, conversation memory, the voice server and phone page,

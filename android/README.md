@@ -26,7 +26,7 @@ tokenized); the phone generates and posts `{session, model_output}`; repeat unti
 
 - Model load 1.6 s. The 577-token system+tools prefix is prefilled once (2.7 s), saved to disk, and restored in 48 ms on later launches.
 - Turn "What is Nvidia trading at?": 0.97 s. Step 1 (tool call) prefills 15 new tokens in 165 ms and decodes 18 in 293 ms. Step 2 (answer) prefills 55 in 216 ms and decodes 14 in 212 ms. HTTP to the Mac, including its checks and tools, is ~75 ms.
-- Kokoro: first audio 0.7–1.06 s after the answer arrives (the first clause is synthesized first; RTF ~0.35).
+- Kokoro: first audio 0.7-1.06 s after the answer arrives (the first clause is synthesized first; RTF ~0.35).
 - Two-ticker comparison: 2.1 s turn.
 - See CHANGES-NIGHT.md for what was tried (an i8mm build was slower; 8 threads collapses under load).
 
@@ -47,7 +47,7 @@ headset, a "Glasses · <name>" badge appears and:
 - **Speaker:** with Glasses mode OFF (the default), the Bluetooth call link (SCO/LE) is brought up only while
   listening and dropped as soon as the words are in. The answer then plays as media (A2DP) on the glasses in full
   quality. With Glasses mode ON (Setup), the link stays up for the whole session: no per-turn switch-on cost
-  (often 0.5–1 s), but answers play on the narrow-band call path.
+  (often 0.5-1 s), but answers play on the narrow-band call path.
 - **Logs:** `adb logcat -s LeapsGlasses LeapsStt LeapsTiming` shows the device added/removed, the link time
   ("acquire ... link up in N ms"), the capture route, the end of speech, the playback route, each tap, and
   release->first audio with the glasses details.

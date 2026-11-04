@@ -44,7 +44,7 @@ No-tool rows (greeting, clarify, decline, chat) are just system + user + answer.
 
 - Assistant headers are constrained to ` to=<any of the 14 tools>` or ` to=user`.
 - Nothing is forced on step 1 and there is no reasoning stub.
-- After a tool header, the template-invariant prefix `<atem:function_calls>\n<atem:invoke name="T">\n` (14–15 tokens) is forced. It is the longest token prefix shared by every argument set, so it never creates a token boundary the model wasn't trained on.
+- After a tool header, the template-invariant prefix `<atem:function_calls>\n<atem:invoke name="T">\n` (14-15 tokens) is forced. It is the longest token prefix shared by every argument set, so it never creates a token boundary the model wasn't trained on.
 - After `</atem:function_calls>`, only `<|eot|>` (done) or `<|eom|>` (another call) may follow.
 - Answers are capped at 70 tokens / 2 sentences.
 
@@ -63,7 +63,7 @@ Measured on the base model:
 
 ## Pack note
 
-The 3,072-token sequence length fits. A 5-step LoRA run (rank 16, 16 layers, grad checkpointing, batch 1, rows of 3,032–3,091 tokens) peaked at 28.5 GB footprint and took about 29 s per step.
+The 3,072-token sequence length fits. A 5-step LoRA run (rank 16, 16 layers, grad checkpointing, batch 1, rows of 3,032-3,091 tokens) peaked at 28.5 GB footprint and took about 29 s per step.
 
 # Llama 3.2 format (`LlamaBackend`, `agent.format.render_llama`)
 
