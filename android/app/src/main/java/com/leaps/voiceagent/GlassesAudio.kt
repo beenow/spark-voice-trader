@@ -131,13 +131,13 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
         private var thread: Thread? = null
         @Volatile var routed: String = "?"; private set
         private val lock = Any()
-        private var out: java.io.OutputStream? = ParcelFileDescriptor.AutoCloseOutputStream(sink)
+        private var out: java.io.OutputStream? = ParcelFileDescriptor.AutoCloseOutputStream(nonBlocking(sink))
         private val recent = ArrayDeque<ByteArray>()      // the last REPLAY_MS, for the next session
 
         /** The next recognizer session's pipe: it gets the last REPLAY_MS, then the live audio. */
         fun swap(sink: ParcelFileDescriptor) = synchronized(lock) {
             out?.let { runCatching { it.close() } }
-            val o = ParcelFileDescriptor.AutoCloseOutputStream(sink)
+            val o = ParcelFileDescriptor.AutoCloseOutputStream(nonBlocking(sink))
             out = runCatching { recent.forEach { o.write(it) }; o }.getOrElse { runCatching { o.close() }; null }
             log("capture: next recognizer session (replayed ${recent.size * 20} ms)")
         }
@@ -145,7 +145,8 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
         private fun push(b: ByteArray, n: Int) = synchronized(lock) {
             recent.addLast(b.copyOf(n)); while (recent.size > REPLAY_MS / 20) recent.removeFirst()
             val o = out ?: return@synchronized
-            // The session ended and closed its end (EPIPE): keep capturing; swap() starts the next one.
+            // The session ended (EPIPE), or stopped reading and the pipe is full (EAGAIN, non-blocking: never stall
+            // the capture thread while it holds the lock): keep capturing; swap() starts the next one.
             runCatching { o.write(b, 0, n) }.onFailure { runCatching { o.close() }; out = null }
         }
 
@@ -193,6 +194,10 @@ class GlassesAudio(context: Context, private val onChange: (AudioDeviceInfo?) ->
         }
 
         fun stop() { running = false }
+
+        private fun nonBlocking(pfd: ParcelFileDescriptor): ParcelFileDescriptor = pfd.also {
+            runCatching { android.system.Os.fcntlInt(it.fileDescriptor, android.system.OsConstants.F_SETFL, android.system.OsConstants.O_NONBLOCK) }
+        }
 
         companion object {
             const val RATE = 16_000
