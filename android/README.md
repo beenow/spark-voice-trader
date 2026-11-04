@@ -9,7 +9,7 @@ phone** (llama.cpp, CPU, arm64). Built for a hackathon demo on a Galaxy Z Fold.
 |---|---|---|
 | Speech to text | **phone** | Android `SpeechRecognizer`; the on-device recognizer when the phone has one (offline), else the system recognizer asked to prefer offline |
 | The model: every token of every tool call and answer | **phone** | `llama-1b-loop-Q4_K_M.gguf` (Llama 3.2 1B + our LoRA, fused, 808 MB) through llama.cpp over JNI |
-| Text to speech | **phone** | Kokoro-82M (ONNX Runtime, voice `af_heart`, speed 1.05) fed by a Rust misaki phonemizer; Android `TextToSpeech` only as a fallback (bundle missing, or a sentence the lexicon cannot say) |
+| Text to speech | **phone** | Android `TextToSpeech` in this repo. The demo video used a proprietary on-device Kokoro-82M voice (prior work, not included), loaded through `OnDeviceVoice.kt` when a build has it; see "Voice" below |
 | Prompt rendering, output parsing, validators/repairs, tool execution (mock market), slot fill, conversation memory | **Mac** (step server, `voice/step_server.py`, port 8310) | the same Python code the model was evaluated with, imported unchanged |
 
 The split is deliberate: the phone does all the *generation*, the Mac keeps the code checks identical to the
@@ -60,13 +60,11 @@ Q4_K_M; free-text answers identical 7/10 (Q4_K_M) and 8/10 (Q8_0). Q4_K_M ships 
 
 ## Build it yourself
 
-Needs: Android SDK + NDK 29 (`ANDROID_HOME`), JDK 17, CMake, and for the phonemizer rustup with
-`aarch64-linux-android` + `cargo-ndk`.
+Needs: Android SDK + NDK 29 (`ANDROID_HOME`), JDK 17, CMake.
 
 ```sh
 ./scripts/fetch_llama_cpp.sh              # pinned llama.cpp into third_party/
 ./ops/build-llama-android.sh              # llama.cpp -> app/src/main/jniLibs/arm64-v8a
-./ops/build-phonemizer-android.sh         # Rust phonemizer (phonemizer/) -> jniLibs + assets
 LEAPS_SERVER=http://<mac-ip>:8310 ./build_apk.sh   # compile only; -> app/build/outputs/apk/debug/app-debug.apk
 ./scripts/install.sh                      # adb install -r -g + launch
 ```
@@ -99,8 +97,15 @@ then loads them. Over USB instead of Wi-Fi: `./scripts/install.sh --usb-reverse`
 - `app/src/main/cpp/agent_llama.cpp`, `LlamaBridge.kt`: llama.cpp JNI shim (KV-prefix reuse, greedy decode with
   the same stop rules as the Mac backend).
 - `StepClient.kt`, `ModelStore.kt`: step protocol; manifest download with resume + sha256.
-- `KokoroSpeaker.kt`, `TtsNormalizer.kt`, `com/leapsify/kokoro`, `com/leapsify/phonemizer`, `phonemizer/` (Rust,
-  MIT OR Apache-2.0): on-device TTS, adapted from the Leapsify app's generic runtime pieces.
+- `KokoroSpeaker.kt`, `OnDeviceVoice.kt`: speech out, sentence by sentence, with first-audio timing; Android
+  `TextToSpeech` unless the build includes an on-device voice.
+
+### Voice
+
+The neural voice heard in the demo video (Kokoro-82M on the phone, with a phonemizer and pronunciation lexicon from
+the Leapsify app) is prior, proprietary work and is not in this repository. `OnDeviceVoice.kt` is the seam: a build
+that adds a `com.leaps.voiceagent.privatevoice.Provider` source dir (see `app/build.gradle.kts`) uses it; without one,
+every answer is spoken by Android `TextToSpeech`. Timings in this README that mention Kokoro were measured with it.
 - `MainActivity.kt`: the single-activity UI.
 - `src/debug/.../DebugAskReceiver.kt` (debug builds only): `adb shell am broadcast -n com.leaps.voiceagent/.DebugAskReceiver
   --es q "..." [--es session id] [--ez mute true]` runs a typed question through the same pipeline (STT skipped) and

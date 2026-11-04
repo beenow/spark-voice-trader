@@ -3,7 +3,13 @@
 set -e
 cd "$(dirname "$0")"
 [ -f app/src/main/jniLibs/arm64-v8a/libllama.so ] || ./ops/build-llama-android.sh
-[ -f app/src/main/jniLibs/arm64-v8a/libphonemizer.so -a -f app/src/main/assets/phonemizer/lexicon.bin ] || ./ops/build-phonemizer-android.sh
+# optional private on-device voice (see app/build.gradle.kts): its native part, when that dir exists
+PV=${LEAPS_PRIVATE_VOICE:-$HOME/leaps-voice-agent-private/voice}
+if [ -x "$PV/build-phonemizer-android.sh" ]; then
+  [ -f app/src/main/jniLibs/arm64-v8a/libphonemizer.so -a -f app/src/main/assets/phonemizer/lexicon.bin ] || "$PV/build-phonemizer-android.sh" "$PWD"
+else
+  rm -f app/src/main/jniLibs/arm64-v8a/libphonemizer.so; rm -rf app/src/main/assets/phonemizer    # public build: Android TTS
+fi
 [ -f local.properties ] || printf 'sdk.dir=/opt/homebrew/share/android-commandlinetools\n' > local.properties
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home

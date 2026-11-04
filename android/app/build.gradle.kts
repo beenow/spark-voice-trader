@@ -37,7 +37,11 @@ android {
     packaging { jniLibs { useLegacyPackaging = true } }
 }
 
-dependencies {
-    // Kokoro-82M on the phone (com.leapsify.kokoro.KokoroSynth). abiFilters above keeps arm64-v8a only.
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
+// Optional on-device voice (OnDeviceVoice.kt): not in this repository. A private source dir is added when it exists
+// ($LEAPS_PRIVATE_VOICE, default ~/leaps-voice-agent-private/voice); without it the app speaks with Android TTS.
+val privateVoice = file(System.getenv("LEAPS_PRIVATE_VOICE") ?: "${System.getProperty("user.home")}/leaps-voice-agent-private/voice")
+if (privateVoice.resolve("java").isDirectory) {
+    android.sourceSets["main"].java.srcDir(privateVoice.resolve("java"))
+    // the private voice runs an ONNX model; abiFilters above keeps arm64-v8a only
+    dependencies { implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0") }
 }

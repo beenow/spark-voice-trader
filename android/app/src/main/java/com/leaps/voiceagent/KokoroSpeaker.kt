@@ -9,9 +9,6 @@ import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.Log
-import com.leapsify.kokoro.KokoroSynth
-import com.leapsify.phonemizer.Phonemizer
-import com.leapsify.phonemizer.PhonemizerAssets
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -21,21 +18,19 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * On-device speech: Kokoro-82M (ONNX Runtime) fed by the Rust misaki phonemizer, both on the phone.
+ * Speech out, on the phone. With an [OnDeviceVoice] in the build (the demo used a proprietary Kokoro-82M voice):
+ * text -> sentences -> per sentence: [OnDeviceVoice.render] -> one streaming [AudioTrack]. Sentences are rendered
+ * one after another on [synthThread] while earlier ones play, so playback starts as soon as the FIRST sentence is
+ * rendered ([onFirstAudio] reports that time).
  *
- * text -> sentences -> per sentence: [TtsNormalizer] -> [Phonemizer] -> [KokoroSynth] -> one streaming
- * [AudioTrack]. Sentences are synthesized one after another on [synthThread] while earlier ones play, so
- * playback starts as soon as the FIRST sentence is rendered ([onFirstAudio] reports that time).
- *
- * Android [TextToSpeech] is only the fallback: for the whole reply when Kokoro is not loaded, and for one
- * sentence the lexicon cannot say (unknown word), or whose render fails / is NaN / is silent.
+ * Android [TextToSpeech] speaks the whole reply when there is no on-device voice (the public build), and any
+ * sentence the voice cannot say, or whose render fails / is NaN / is silent.
  */
 class KokoroSpeaker(private val context: Context, private val systemTts: () -> TextToSpeech?) {
     private val synthThread = Executors.newSingleThreadExecutor { r -> Thread(r, "kokoro-synth") }
     private val generation = AtomicInteger()
     private val queue = LinkedBlockingQueue<Item>()
-    @Volatile private var phonemizer: Phonemizer? = null
-    @Volatile private var synth: KokoroSynth? = null
+    @Volatile private var voice: OnDeviceVoice? = null
     @Volatile private var track: AudioTrack? = null
     @Volatile var speed = 1.05f
 
@@ -48,8 +43,8 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
     @Volatile private var reopen = false
     @Volatile var loadError: String? = null; private set
 
-    val ready: Boolean get() = synth != null && phonemizer != null
-    val provider: String get() = synth?.executionProvider?.name ?: "-"
+    val ready: Boolean get() = voice != null
+    val provider: String get() = voice?.provider ?: "-"
     var config = ""; private set
 
     private sealed class Item(val gen: Int) {
@@ -65,29 +60,27 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
         }, "kokoro-audio").apply { isDaemon = true }.start()
     }
 
-    /** Loads the phonemizer and the ONNX session (seconds). Blocking; returns the load time in ms or -1. */
+    /** Loads the on-device voice from [dir] (seconds). Blocking; returns the load time in ms, or -1 (no voice in
+     *  this build, or it failed: [loadError] says which). */
     fun load(dir: File, threads: Int = 4, xnnpack: Boolean = true, spin: Boolean = true, xnnThreads: Int = threads): Long {
         val t0 = SystemClock.elapsedRealtime()
         return try {
-            val p = Phonemizer(PhonemizerAssets.install(context))
-            val s = try {
-                KokoroSynth(File(dir, "model.onnx"), File(dir, "voice.bin"), File(dir, "tokenizer.json"),
-                    preferXnnpack = xnnpack, threads = threads, allowSpinning = spin, xnnpackThreads = xnnThreads)
-            } catch (e: Throwable) { p.close(); throw e }
-            phonemizer = p; synth = s; loadError = null
-            config = "${s.executionProvider} t$threads${if (xnnpack) "/x$xnnThreads" else ""}${if (spin) "" else " nospin"}"
-            // Warm-up render: the first session.run pays one-off allocation costs.
-            runCatching { s.synthesize(p.phonemize("Ready.").phonemes, speed) }
-            runCatching { s.synthesize(p.phonemize("Apple is at about two forty-nine, down one point four percent today.").phonemes, speed) }
-            // Synth benchmark line for tuning: one fixed clause, timed after the warm-up.
+            val v = OnDeviceVoice.load(context, dir, threads, xnnpack, spin, xnnThreads)
+                ?: run { loadError = "no on-device voice in this build (Android TTS)"; return -1 }
+            voice = v; loadError = null
+            config = v.provider
+            // Warm-up render: the first run pays one-off allocation costs.
+            runCatching { v.render("Ready.", speed) }
+            runCatching { v.render("Apple is at about two forty-nine, down one point four percent today.", speed) }
+            // Benchmark line for tuning: one fixed clause, timed after the warm-up.
             runCatching {
                 val b0 = SystemClock.elapsedRealtime()
-                val pcm = s.synthesize(p.phonemize(TtsNormalizer.normalize("Nvidia is at about one eighty-five,")).phonemes, speed)
-                Log.i(TAG, "bench $config: ${SystemClock.elapsedRealtime() - b0} ms for ${pcm.size * 1000L / KokoroSynth.SAMPLE_RATE} ms audio")
+                val pcm = v.render("Nvidia is at about one eighty-five,", speed) ?: return@runCatching
+                Log.i(TAG, "bench $config: ${SystemClock.elapsedRealtime() - b0} ms for ${pcm.size * 1000L / SAMPLE_RATE} ms audio")
             }
             SystemClock.elapsedRealtime() - t0
         } catch (e: Throwable) {
-            Log.e(TAG, "kokoro load failed", e)
+            Log.e(TAG, "on-device voice load failed", e)
             loadError = e.message ?: e.javaClass.simpleName
             -1
         }
@@ -135,22 +128,11 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
         }
     }
 
-    /** One sentence through the chain; null means "say it with the system voice". */
+    /** One sentence through the on-device voice; null means "say it with the system voice". */
     private fun render(unit: String): FloatArray? {
-        val p = phonemizer ?: return null
-        val s = synth ?: return null
+        val v = voice ?: return null
         return try {
-            var spoken = TtsNormalizer.normalize(unit)
-            var ph = p.phonemize(spoken)
-            if (ph.unknownWords.isNotEmpty()) {            // spell what the lexicon does not know, then retry
-                for (w in ph.unknownWords) spoken = spoken.replace(w, TtsNormalizer.spellOut(w) ?: "")
-                ph = p.phonemize(spoken)
-            }
-            if (ph.unknownWords.isNotEmpty()) { Log.i(TAG, "unknown words ${ph.unknownWords}: system voice"); return null }
-            if (s.tokenize(ph.phonemes).size !in 1..KokoroSynth.MAX_TOKENS) return null
-            val t0 = SystemClock.elapsedRealtime()
-            val pcm = s.synthesize(ph.phonemes, speed)
-            Log.i(TAG, "synth ${SystemClock.elapsedRealtime() - t0} ms for ${pcm.size * 1000L / KokoroSynth.SAMPLE_RATE} ms audio: $unit")
+            val pcm = v.render(unit, speed) ?: return null
             var peak = 0f
             for (x in pcm) { if (x.isNaN()) return null; peak = maxOf(peak, kotlin.math.abs(x)) }
             if (peak < 1e-3f) null else pcm
@@ -198,7 +180,7 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
 
     private fun drain(t: AudioTrack, frames: Long, gen: Int) {
         if (t.playState != AudioTrack.PLAYSTATE_PLAYING) runCatching { t.play() }
-        val deadline = SystemClock.elapsedRealtime() + frames * 1000 / KokoroSynth.SAMPLE_RATE + 2000
+        val deadline = SystemClock.elapsedRealtime() + frames * 1000 / SAMPLE_RATE + 2000
         while (SystemClock.elapsedRealtime() < deadline) {
             val head = (runCatching { t.playbackHeadPosition }.getOrDefault(0)).toLong() and 0xffffffffL
             if (head >= frames || gen != generation.get()) break      // stop() flushed: nothing left to wait for
@@ -222,14 +204,14 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
     }
 
     private fun open(): AudioTrack {
-        val min = AudioTrack.getMinBufferSize(KokoroSynth.SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+        val min = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
         val comm = commDevice
         Log.i("LeapsGlasses", "playback route: ${comm?.let { "call path to " + GlassesAudio.name(it) } ?: "media"}")
         return AudioTrack.Builder()
             .setAudioAttributes(attributes())
             .setAudioFormat(AudioFormat.Builder().setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                .setSampleRate(KokoroSynth.SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
-            .setBufferSizeInBytes(maxOf(min, KokoroSynth.SAMPLE_RATE / 2 * 4))
+                .setSampleRate(SAMPLE_RATE).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+            .setBufferSizeInBytes(maxOf(min, SAMPLE_RATE / 2 * 4))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
             .also { t -> comm?.let { t.setPreferredDevice(it) } }
@@ -243,14 +225,15 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
     fun close() {
         stop()
         synthThread.execute {
-            synth?.close(); phonemizer?.close(); synth = null; phonemizer = null
+            voice?.close(); voice = null
             track?.release(); track = null
         }
     }
 
     companion object {
         private const val TAG = "KokoroSpeaker"
-        private const val CHUNK = KokoroSynth.SAMPLE_RATE / 20      // 50 ms per blocking write
+        private const val SAMPLE_RATE = OnDeviceVoice.SAMPLE_RATE
+        private const val CHUNK = SAMPLE_RATE / 20      // 50 ms per blocking write
 
         /**
          * Sentences, and a long first sentence cut at its first comma so the first audio comes sooner
