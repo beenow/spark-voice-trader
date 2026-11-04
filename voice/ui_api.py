@@ -227,3 +227,83 @@ def nav_for(tool_calls: list[dict] | None, ticket_id: str | None = None, matches
         return {"screen": "home", "section": "watchlist", "highlight": list(dict.fromkeys(syms))}
     sec = next((_HOME_SECTION[c["tool"]] for c in calls if c["tool"] in _HOME_SECTION), "positions")
     return {"screen": "home", "section": sec, "highlight": []}
+
+
+# ------------------------------------------------------------------- the screen following the spoken answer
+_SPOT_WORDS = {
+    "position": r"\b(?:hold|holding|shares|contracts?|position|gain|loss)\b",
+    "levels": r"\b(?:support|resistance)\b",
+    "indicators": r"\b(?:rsi|ema|average|overbought|oversold|neutral|trend\w*|volume)\b",
+    "news": r"\b(?:news|headlines?|positive|negative|mixed|hours?\s+ago|analysts?)\b",
+    "fundamentals": r"\b(?:earnings|target|valuation|p\s*/?\s*e|market\s+cap|cheap|rich)\b",
+    "chart": r"\b(?:is\s+at|trading|up|down|flat)\b",
+}
+
+
+def split_sentences(text: str) -> list[str]:
+    """The phone's sentence split (KokoroSpeaker.units before its first-comma cut): sentence i of the answer is
+    the i-th thing it starts playing as a sentence."""
+    import re
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", (text or "").strip()) if s.strip()]
+
+
+def _spots(calls: list[dict], question: str) -> list[dict]:
+    """One screen spot per symbol-page call, in call order: (symbol, section, focus)."""
+    out = []
+    for c in calls:
+        sec = _SYMBOL_SECTION.get(c["tool"])
+        sym = (c.get("args") or {}).get("symbol")
+        if not sec or not sym or sym == "ALL":
+            continue
+        focus, tf = chart_focus([c], question)
+        out.append({"symbol": sym, "section": sec, "focus": focus, "timeframe": tf})
+    return out
+
+
+def nav_seq(tool_calls: list[dict] | None, spoken: str = "", question: str = "",
+            names: dict[str, str] | None = None) -> list[dict] | None:
+    """The screens of a multi-part answer in the order they are spoken: [{sentence, nav}], or None when the turn
+    has one screen (then "nav" alone applies). Each spot (a position card, the chart with a line, a news card,
+    another symbol's page) goes to the first sentence that talks about it (its words, or for a compare the
+    company's name); failing that, the sentence after the last one placed. Screens are ordered by sentence;
+    spots on the same sentence and page share one screen. Without `spoken` (the tool step, before the answer exists) sentences are call order."""
+    import re
+    calls = [c for c in (tool_calls or []) if isinstance(c, dict) and c.get("tool")]
+    spots = _spots(calls, question)
+    if len(spots) < 2 or len({(s["symbol"], s["section"]) for s in spots}) < 2:
+        return None
+    sents = split_sentences(spoken)
+    multi = len({s["symbol"] for s in spots}) > 1
+    at: list[int] = []
+    for k, s in enumerate(spots):
+        if not sents:
+            at.append(k)
+            continue
+        pat = re.escape((names or {}).get(s["symbol"], s["symbol"])) if multi else _SPOT_WORDS.get(s["section"], "$^")
+        hit = next((i for i in range(len(sents)) if re.search(pat, sents[i], re.I)), None)
+        if hit is None:                     # not named: the sentence after the last one placed so far
+            hit = min((max(at) + 1) if at else 0, len(sents) - 1)
+        at.append(hit)
+    order = sorted(range(len(spots)), key=lambda k: (at[k], k))
+    spots, at = [spots[k] for k in order], [at[k] for k in order]
+    seq: list[dict] = []
+    held = {s["symbol"] for s in spots if s["section"] == "position"}
+    for s, i in zip(spots, at):
+        if seq and seq[-1]["sentence"] == i and seq[-1]["nav"]["symbol"] == s["symbol"]:
+            n = seq[-1]["nav"]                                    # same sentence, same page: one screen
+            n["sections"].append(s["section"])
+            n["focus"] = list(dict.fromkeys(n.get("focus", []) + s["focus"]))
+            if s["timeframe"]:
+                n["timeframe"] = s["timeframe"]
+            if s["section"] != "position":
+                n["flash"] = "chart" if s["section"] in ("levels", "indicators", "chart") else s["section"]
+            continue
+        n = {"screen": "symbol", "symbol": s["symbol"], "tab": "overview", "sections": [s["section"]],
+             "focus": list(s["focus"]), "seq": True,
+             "flash": "chart" if s["section"] in ("levels", "indicators", "chart") else s["section"]}
+        if s["timeframe"]:
+            n["timeframe"] = s["timeframe"]
+        if s["symbol"] in held and "position" not in n["sections"]:
+            n["sections"].insert(0, "position")                  # the card stays on top while the chart is shown
+        seq.append({"sentence": i, "nav": n})
+    return seq if len(seq) > 1 else None

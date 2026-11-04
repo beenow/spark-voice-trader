@@ -336,12 +336,24 @@ class MainActivity : Activity() {
 
     private fun js(code: String) = ui { web.evaluateJavascript(code, null) }
 
-    /** The agent's screen for this turn (the step server's "nav"), shown once per change while the turn runs. */
+    /** The agent's screen for this turn (the step server's "nav"), shown once per change while the turn runs.
+     *  A multi-part answer ("nav_seq") starts at its first screen; the rest follow the speech (NavSeq). */
     private fun uiNav(r: JSONObject) {
-        val n = r.optJSONObject("nav")?.toString() ?: return
+        (r.optJSONArray("nav_seq")?.optJSONObject(0)?.optJSONObject("nav") ?: r.optJSONObject("nav"))?.let { showNav(it.toString()) }
+    }
+
+    private fun showNav(n: String) {
         if (n == lastNav) return
         lastNav = n
         js("window.LeapsUI && LeapsUI.nav($n)")
+    }
+
+    /** Screens of a multi-part answer, by the sentence that speaks them; done ones are removed. */
+    private class NavSeq(arr: JSONArray) {
+        val left = (0 until arr.length()).mapNotNull { arr.optJSONObject(it) }
+            .map { it.optInt("sentence") to it.optJSONObject("nav").toString() }.toMutableList()
+        @Synchronized fun upTo(i: Int): List<String> = left.filter { it.first <= i }.map { it.second }.also { left.removeAll { p -> p.first <= i } }
+        @Synchronized fun rest(): List<String> = left.map { it.second }.also { left.clear() }
     }
 
     private fun uiReset() { lastNav = null; js("window.LeapsUI && LeapsUI.reset(${JSONObject.quote(session)})") }
@@ -959,13 +971,13 @@ class MainActivity : Activity() {
     // ================================================================ speech out
     /** Kokoro on the phone, sentence by sentence; Android TTS only where Kokoro cannot (see KokoroSpeaker). */
     private fun speak(s: String, flush: Boolean, answer: Boolean = false, mute: Boolean = false,
-                      onSynthDone: (() -> Unit)? = null,
+                      onSynthDone: (() -> Unit)? = null, onSentenceStart: ((Int) -> Unit)? = null,
                       onFinished: ((ttfaMs: Long, voices: Set<String>) -> Unit)? = null) {
         if (s.isBlank()) { onFinished?.invoke(-1, emptySet()); resumeConversation(); return }
         speakingCount.incrementAndGet()
         val used = mutableSetOf<String>()
         var first = -1L
-        speaker.speak(s, flush, mute = mute, onSynthDone = onSynthDone,
+        speaker.speak(s, flush, mute = mute, onSynthDone = onSynthDone, onSentenceStart = onSentenceStart,
             onFirstAudio = { ms, voice -> first = ms
                 if (answer) ui { ttfa.text = "$ms"; if (convo && !listening) talk.text = "Speaking… tap to cut in" }
                 if (answer && turnReleaseAt > 0) {
@@ -1211,7 +1223,12 @@ class MainActivity : Activity() {
                     "${SystemClock.elapsedRealtime() - t0} ms${if (specCancel && end < h.size) " (cancelled by a new question)" else ""}")
             }
         } }
-        speak(answer, false, answer = true, mute = mute, onSynthDone = warmNext) { ttfaMs, voices ->
+        // The screen follows the answer: each part's screen as its sentence starts playing; whatever is left when
+        // the speech ends or is cut off goes straight to its last screen (never left half-way).
+        val screens = r.optJSONArray("nav_seq")?.let { NavSeq(it) }
+        speak(answer, false, answer = true, mute = mute, onSynthDone = warmNext,
+            onSentenceStart = screens?.let { q -> { i: Int -> q.upTo(i).lastOrNull()?.let { showNav(it) } } }) { ttfaMs, voices ->
+            screens?.rest()?.lastOrNull()?.let { showNav(it) }
             rec?.let {
                 it.put("ttfa_ms", ttfaMs).put("end_to_audio_ms", if (ttfaMs >= 0) wall + ttfaMs else null)
                     .put("voice", when { voices.isEmpty() -> "none"; voices.size > 1 -> "kokoro+system"; else -> voices.first() })

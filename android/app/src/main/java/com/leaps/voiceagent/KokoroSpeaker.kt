@@ -107,9 +107,12 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
     /**
      * Speak [text]. [flush] drops what is queued first. [onFirstAudio] runs once with the ms from this call
      * to the first sample reaching the speaker and which voice produced it ("kokoro" / "system").
+     * [onSentenceStart] runs with sentence i's index as its audio starts playing (sentences, not units: a first
+     * sentence cut at its comma counts once); muted, as it is synthesized.
      */
     fun speak(text: String, flush: Boolean, mute: Boolean = false, onFirstAudio: ((Long, String) -> Unit)? = null,
-              onSentence: ((String) -> Unit)? = null, onDone: (() -> Unit)? = null, onSynthDone: (() -> Unit)? = null) {
+              onSentence: ((String) -> Unit)? = null, onDone: (() -> Unit)? = null, onSynthDone: (() -> Unit)? = null,
+              onSentenceStart: ((Int) -> Unit)? = null) {
         if (text.isBlank()) return
         if (flush) stop()
         val gen = generation.get()
@@ -119,15 +122,17 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
             if (!reported) { reported = true; onFirstAudio?.invoke(SystemClock.elapsedRealtime() - t0, voice) }
         }
         synthThread.execute {
-            for (unit in units(text)) {
+            for ((unit, sentence, opens) in sentenceUnits(text)) {
                 if (generation.get() != gen) break
                 val pcm = if (ready) render(unit) else null
                 val voice = if (pcm != null) "kokoro" else "system"
                 onSentence?.invoke(voice)
+                val firstAudio = first(voice)
+                val starts: () -> Unit = { firstAudio(); if (opens) onSentenceStart?.invoke(sentence) }
                 when {
-                    mute -> first(voice)()          // synthesis timed, nothing played
-                    pcm != null -> queue.put(Item.Pcm(gen, pcm, first(voice)))
-                    else -> queue.put(Item.System(gen, unit, first(voice)))
+                    mute -> starts()                // synthesis timed, nothing played
+                    pcm != null -> queue.put(Item.Pcm(gen, pcm, starts))
+                    else -> queue.put(Item.System(gen, unit, starts))
                 }
             }
             onSynthDone?.invoke()                // all units rendered: the CPU is free while the audio plays
@@ -256,14 +261,18 @@ class KokoroSpeaker(private val context: Context, private val systemTts: () -> T
          * Sentences, and a long first sentence cut at its first comma so the first audio comes sooner
          * (Kokoro renders a whole unit before any of it can play).
          */
-        fun units(text: String): List<String> {
+        fun units(text: String): List<String> = sentenceUnits(text).map { it.first }
+
+        /** [units] with each unit's sentence index and whether it opens that sentence. */
+        fun sentenceUnits(text: String): List<Triple<String, Int, Boolean>> {
             val sentences = Regex("""(?<=[.!?])\s+""").split(text.trim()).map { it.trim() }.filter { it.isNotEmpty() }
             if (sentences.isEmpty()) return emptyList()
             val first = sentences[0]
             val comma = first.indexOf(", ", 12)
+            val rest = sentences.drop(1).mapIndexed { i, x -> Triple(x, i + 1, true) }
             return if (first.length > 40 && comma in 12 until first.length - 12)
-                listOf(first.substring(0, comma + 1), first.substring(comma + 2)) + sentences.drop(1)
-            else sentences
+                listOf(Triple(first.substring(0, comma + 1), 0, true), Triple(first.substring(comma + 2), 0, false)) + rest
+            else listOf(Triple(first, 0, true)) + rest
         }
     }
 }

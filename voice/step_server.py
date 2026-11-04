@@ -284,6 +284,7 @@ class Session:
         events = [_plain(e) for e in events]
         self.turn_events = getattr(self, "turn_events", []) + events
         nav = self.nav()
+        seq = self.nav_seq(item["result"].spoken if "result" in item else "")
         if "prompt" in item:
             hint, self.last_hint = getattr(self, "last_hint", None), None
             if hint and len(self.backend.stats) == 0:      # first step of a turn: how much of the hint held
@@ -297,7 +298,7 @@ class Session:
                     log.info("next_prefix hit: %d/%d tokens", i, len(toks))
             return {"prompt": item["prompt"], "tokens": item["tokens"], "max_tokens": MAX_TOKENS,
                     "answer_max_tokens": ANSWER_MAX_TOKENS, "step": len(self.backend.stats) + 1, "events": events,
-                    **({"nav": nav} if nav else {})}
+                    **({"nav": nav} if nav else {}), **({"nav_seq": seq} if seq else {})}
         if "error" in item:
             return {"say": "Sorry, I couldn't get that.", "display": "", "error": item["error"], "events": events}
         res = item["result"]
@@ -307,7 +308,7 @@ class Session:
                 "timings": {"mac_total_s": round(item["total_s"], 3),
                             "tools_s": [round(x, 4) for x in tm.get("tools") or []],
                             "decides": self.backend.stats if self.backend else []},
-                "next_prefix": self._hint(), **({"nav": nav} if nav else {})}
+                "next_prefix": self._hint(), **({"nav": nav} if nav else {}), **({"nav_seq": seq} if seq else {})}
 
     def nav(self) -> dict | None:
         """The screen for this turn so far (voice.ui_api.nav_for), from the executed tool calls: sent with the
@@ -324,6 +325,22 @@ class Session:
             return nav_for(calls, new[-1] if new else None, matches, getattr(self, "question", ""))
         except Exception:  # noqa: BLE001 -- a screen hint must never cost the phone its answer
             log.exception("nav failed")
+            return None
+
+    def _calls(self) -> list[dict]:
+        ok = {e.get("tool") for e in self.turn_events if e.get("type") == "tool_result" and e.get("ok")}
+        return [{"tool": e["tool"], "args": e.get("args") or {}} for e in self.turn_events
+                if e.get("type") == "tool_call" and e.get("tool") in ok]
+
+    def nav_seq(self, spoken: str) -> list[dict] | None:
+        """The screens of a multi-part answer, one per spoken sentence (voice.ui_api.nav_seq); the phone moves
+        to each as its sentence starts playing. "nav" stays the one-screen version for older apps."""
+        from voice.ui_api import nav_seq
+        try:
+            names = {s: u.name for s, u in self.world.universe.items()}
+            return nav_seq(self._calls(), spoken, getattr(self, "question", ""), names)
+        except Exception:  # noqa: BLE001 -- a screen hint must never cost the phone its answer
+            log.exception("nav_seq failed")
             return None
 
     def _hint(self) -> list[int]:

@@ -108,3 +108,20 @@ def test_ui_routes_and_voice_ticket(client):
     assert act["orders"][0]["order_id"] == done["order_id"]
     m = client.post("/ui/ticket", json={"session": s, "symbol": "aapl", "qty": 1}, headers=H).json()
     assert m["symbol"] == "AAPL" and m["status"] == "needs confirmation"
+
+
+def test_nav_seq_follows_the_answer():
+    c = [{"tool": "get_position", "args": {"symbol": "NVDA"}}, {"tool": "get_levels", "args": {"symbol": "NVDA"}}]
+    said = ("You hold one hundred twenty-five shares at about one fifty-eight, up seventeen percent. "
+            "Yes, it's near support at about one eighty-three.")
+    seq = ui_api.nav_seq(c, said, "How's my Nvidia position and is it near support")
+    assert [s["sentence"] for s in seq] == [0, 1]
+    assert seq[0]["nav"]["flash"] == "position" and seq[1]["nav"]["flash"] == "chart"
+    assert seq[1]["nav"]["focus"] == ["support"] and "position" in seq[1]["nav"]["sections"]
+    assert ui_api.split_sentences(said) == [said.split(". ")[0] + ".", said.split(". ")[1]]
+    # both parts in one sentence: one screen, so no sequence
+    assert ui_api.nav_seq(c, "You hold shares and it's near support.", "") is None
+    assert ui_api.nav_seq([{"tool": "get_quote", "args": {"symbol": "AAPL"}}], "Apple is up.") is None
+    two = ui_api.nav_seq([{"tool": "get_quote", "args": {"symbol": "AAPL"}}, {"tool": "get_quote", "args": {"symbol": "MSFT"}}],
+                         "Microsoft is down. Apple is up.", "", {"AAPL": "Apple", "MSFT": "Microsoft"})
+    assert [(s["sentence"], s["nav"]["symbol"]) for s in two] == [(0, "MSFT"), (1, "AAPL")]
