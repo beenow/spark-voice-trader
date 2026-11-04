@@ -11,7 +11,7 @@ android {
     ndkVersion = "29.0.14206865"
 
     defaultConfig {
-        applicationId = "com.leaps.voiceagent"
+        applicationId = "com.leaps.voiceagent.shell"
         minSdk = 33
         targetSdk = 35
         versionCode = 1

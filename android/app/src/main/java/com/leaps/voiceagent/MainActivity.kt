@@ -21,7 +21,11 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -205,12 +209,13 @@ class MainActivity : Activity() {
         val badge = label("Llama 3.2 1B · on device", 13.5f, Color.rgb(8, 30, 18), true).apply {
             background = rounded(phone, 20); setPadding(dp(12), dp(5), dp(12), dp(5))
         }
-        val title = label("Leaps", 26f, fg, true)
+        val title = label("Leaps Trader", 22f, fg, true)
         glassesBadge = label("", 13.5f, Color.rgb(8, 18, 40), true).apply {
             background = rounded(mac, 20); setPadding(dp(12), dp(5), dp(12), dp(5)); visibility = View.GONE
         }
         glassesBtn = button(glassesLabel()) { toggleGlassesMode() }
         val gear = label("Setup", 14f, muted).apply { setPadding(dp(12), dp(6), dp(4), dp(6)); setOnClickListener { showSetup(setupPanel.visibility != View.VISIBLE) } }
+        val dbg = label("Debug", 14f, muted).apply { setPadding(dp(12), dp(6), dp(4), dp(6)); setOnClickListener { showDebug(debugPanel.visibility != View.VISIBLE) } }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             addView(title)
@@ -219,7 +224,9 @@ class MainActivity : Activity() {
             addView(View(context), LinearLayout.LayoutParams(dp(8), 1))
             addView(glassesBadge)
             addView(View(context), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(dbg)
             addView(gear)
+            setPadding(dp(16), dp(36), dp(16), dp(8))
         }
         status = label("starting…", 13f, muted).apply { setPadding(0, dp(6), 0, 0) }
         voiceInfo = label("voice: …", 13f, muted).apply { setPadding(0, dp(2), 0, dp(10)) }
@@ -268,24 +275,107 @@ class MainActivity : Activity() {
             addView(ask, LinearLayout.LayoutParams(WRAP_CONTENT, WRAP_CONTENT).apply { leftMargin = dp(8) })
         }
 
+        // The trading UI (voice/ui_static on the step server) fills the screen; the agent drives it (uiNav).
+        web = WebView(this).apply {
+            setBackgroundColor(bg)
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            webViewClient = WebViewClient()
+            addJavascriptInterface(object {
+                @JavascriptInterface fun onConfirmed(tid: String) = ui { onTicketConfirmed(tid) }
+            }, "Leaps")
+        }
+        // The measurement view (chips, metrics, the turn feed): behind "Debug", for the runs-on-the-phone shot.
+        debugPanel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, dp(16), 0); setBackgroundColor(bg)
+            addView(status)
+            addView(voiceInfo)
+            addView(setupPanel)
+            addView(where)
+            addView(legend)
+            addView(metrics)
+            addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { topMargin = dp(10) })
+            addView(askRow)
+            visibility = View.GONE
+        }
+        val content = FrameLayout(this).apply {
+            addView(web, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+            addView(debugPanel, FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        }
+        caption = label("", 15f, fg).apply { maxLines = 3; setPadding(dp(4), 0, dp(4), dp(8)); visibility = View.GONE }
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL; setPadding(dp(16), dp(10), dp(16), dp(16)); setBackgroundColor(bg)
+            addView(caption)
+            addView(talk, LinearLayout.LayoutParams(MATCH_PARENT, dp(64)))
+        }
+        talk.textSize = 19f
+        root.setPadding(0, 0, 0, 0)
         root.addView(header)
-        root.addView(status)
-        root.addView(voiceInfo)
-        root.addView(setupPanel)
-        root.addView(where)
-        root.addView(legend)
-        root.addView(metrics)
-        root.addView(scroll, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f).apply { topMargin = dp(10) })
-        root.addView(askRow)
-        root.addView(talk, LinearLayout.LayoutParams(MATCH_PARENT, dp(84)))
+        root.addView(content, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+        root.addView(bottom)
         setContentView(root)
         showSetup(false)
+        loadUi()
     }
 
-    private fun showSetup(show: Boolean) { setupPanel.visibility = if (show) View.VISIBLE else View.GONE }
+    // ================================================================ the trading UI (WebView)
+    private lateinit var web: WebView
+    private lateinit var debugPanel: LinearLayout
+    private lateinit var caption: TextView
+    @Volatile private var lastNav: String? = null
+
+    private fun showDebug(show: Boolean) { debugPanel.visibility = if (show) View.VISIBLE else View.GONE }
+
+    /** The page comes from the step server; the passcode and session go in the fragment (never sent to it). */
+    private fun loadUi() {
+        val base = (prefs.getString("url", null) ?: BuildConfig.DEFAULT_SERVER).trim().trimEnd('/')
+        val pass = prefs.getString("pass", "") ?: ""
+        if (pass.isEmpty()) return
+        web.loadUrl("$base/ui/app/index.html#s=${session}&k=${java.net.URLEncoder.encode(pass, "UTF-8")}")
+    }
+
+    private fun js(code: String) = ui { web.evaluateJavascript(code, null) }
+
+    /** The agent's screen for this turn (the step server's "nav"), shown once per change while the turn runs. */
+    private fun uiNav(r: JSONObject) {
+        val n = r.optJSONObject("nav")?.toString() ?: return
+        if (n == lastNav) return
+        lastNav = n
+        js("window.LeapsUI && LeapsUI.nav($n)")
+    }
+
+    private fun uiReset() { lastNav = null; js("window.LeapsUI && LeapsUI.reset(${JSONObject.quote(session)})") }
+
+    private fun setCaption(t: String) = ui { statusCaption = false; caption.text = t; caption.visibility = if (t.isBlank()) View.GONE else View.VISIBLE }
+
+    private fun onTicketConfirmed(tid: String) {
+        android.util.Log.i("LeapsUi", "ticket $tid confirmed from the screen")
+        speak("Sent.", true)
+    }
+
+    // Back: the Debug panel, then the web screens' own stack, then leave. (onBackPressed, not OnBackInvokedCallback:
+    // the manifest does not opt in to predictive back, so a registered callback would never be called.)
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (debugPanel.visibility == View.VISIBLE) { showDebug(false); return }
+        web.evaluateJavascript("window.LeapsUI ? LeapsUI.back() : false") { res ->
+            @Suppress("DEPRECATION") if (res != "true") super.onBackPressed()
+        }
+    }
+
+    private fun showSetup(show: Boolean) {
+        setupPanel.visibility = if (show) View.VISIBLE else View.GONE
+        if (show) showDebug(true)
+    }
 
     private fun ui(f: () -> Unit) { main.post(f) }
-    private fun setStatus(s: String) = ui { status.text = s }
+    private fun setStatus(s: String) = ui {
+        status.text = s
+        // setup/download progress while Debug is closed; cleared once the model is up (a turn sets its own caption)
+        if (!modelLoaded) { caption.text = s; caption.visibility = View.VISIBLE; statusCaption = true }
+        else if (statusCaption) { caption.text = ""; caption.visibility = View.GONE; statusCaption = false }
+    }
+    private var statusCaption = false
 
     /** Light a pipeline chip: where it ran (phone/mac) and a short detail (ms, offline…). */
     private fun light(key: String, onPhone: Boolean?, detail: String) = ui {
@@ -319,6 +409,7 @@ class MainActivity : Activity() {
 
     private fun saveSettings() {
         prefs.edit().putString("url", urlField.text.toString().trim()).putString("pass", passField.text.toString()).apply()
+        ui { loadUi() }
     }
 
     private fun client() = StepClient(urlField.text.toString().trim(), passField.text.toString())
@@ -477,6 +568,7 @@ class MainActivity : Activity() {
         session = UUID.randomUUID().toString()
         ui { feed.removeAllViews() }
         resetChips()
+        uiReset()
     }
 
     // ================================================================ speech in
@@ -1020,6 +1112,8 @@ class MainActivity : Activity() {
     private fun turn(question: String, sid: String, mute: Boolean = false, rec: JSONObject? = null) {
         val steps = JSONArray()
         bubble(question, 20f, fg, Color.rgb(30, 36, 46))
+        lastNav = null
+        setCaption("“$question”")
         val c = client()
         val t0 = SystemClock.elapsedRealtime()
         var modelMs = 0.0
@@ -1034,6 +1128,7 @@ class MainActivity : Activity() {
         var r = timed(JSONObject().put("session", sid).put("question", question))
         while (r.has("prompt")) {
             showEvents(r.optJSONArray("events"))
+            uiNav(r)
             step++
             light("model", true, "step $step…")
             val g = llama.generate(r.getJSONArray("tokens").toIntArray(), r.optInt("max_tokens", 160),
@@ -1041,7 +1136,7 @@ class MainActivity : Activity() {
             if (g.has("error")) {
                 note("model error: ${g.getString("error")}")
                 c.step(JSONObject().put("session", sid).put("reset", true))
-                if (sid == session) session = UUID.randomUUID().toString()
+                if (sid == session) { session = UUID.randomUUID().toString(); uiReset() }
                 speak("Sorry, something went wrong on the phone.", true, mute = mute)
                 rec?.let { it.put("error", "model: ${g.getString("error")}").put("steps", steps); writeSoak(it) }
                 return
@@ -1085,6 +1180,9 @@ class MainActivity : Activity() {
         light("tts", true, if (speaker.ready) "Kokoro…" else "Android TTS…")
         if (step == 0) light("model", null, "not needed")
         bubble(r.optString("display").ifEmpty { answer }, 21f, fg, Color.rgb(16, 48, 34))
+        uiNav(r)
+        if (r.optJSONObject("nav") == null) js("window.LeapsUI && LeapsUI.refresh()")    // e.g. a confirm by voice
+        setCaption(r.optString("display").ifEmpty { answer })
         r.optString("error").takeIf { it.isNotEmpty() }?.let { note("server error: $it") }
         note("turn ${wall} ms · model on phone ${"%.0f".format(modelMs)} ms over $step step(s)" +
             if (r.optBoolean("fallback")) " · code fallback" else "")
@@ -1131,6 +1229,7 @@ class MainActivity : Activity() {
                     (e.optString("corrected_from").takeIf { it.isNotEmpty() }?.let { "  [fixed from $it]" } ?: ""),
                     15f, mac, null, mono = true)
                 "tool_result" -> if (!e.optBoolean("ok")) note("← ${e.optString("tool")} error: ${e.optString("error")}")
+                "memory_cleared" -> uiReset()
                 "filler" -> {}   // not spoken: synthesizing it would compete with the model for the CPU
                 "error" -> note("check (${e.optString("stage")}): ${e.optString("message")}")
             }

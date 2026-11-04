@@ -9,7 +9,7 @@
         <intent><action android:name="android.intent.action.TTS_SERVICE" /></intent>
     </queries>
     <application
-        android:label="Leaps On-Device"
+        android:label="Leaps Trader"
         android:extractNativeLibs="true"
         android:usesCleartextTraffic="true"
         android:largeHeap="true"
