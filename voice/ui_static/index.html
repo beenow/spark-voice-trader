@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Leaps Trader</title>
+<style>
+:root {
+  --bg: #0b0f14; --card: #131a22; --card2: #18212b; --line: #223040; --fg: #e8eef5; --muted: #8796a8;
+  --up: #34d399; --down: #f87171; --accent: #5eead4; --gold: #fbbf24; --blue: #6ea0ff;
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { overflow-x: hidden; margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.35 -apple-system, "Segoe UI", Roboto, sans-serif; }
+body { padding-bottom: 150px; }
+header { position: sticky; top: 0; z-index: 5; background: rgba(11,15,20,.94); backdrop-filter: blur(8px);
+  display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+header .back { font-size: 22px; color: var(--muted); padding: 0 6px 0 0; display: none; }
+header .title { font-weight: 700; font-size: 17px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header .acct { color: var(--muted); font-size: 13px; text-align: right; }
+main { padding: 12px 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px; margin-bottom: 12px; }
+.card h3 { margin: 0 0 10px; font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.big { font-size: 30px; font-weight: 700; letter-spacing: -.01em; }
+.up { color: var(--up); } .down { color: var(--down); } .muted { color: var(--muted); }
+.row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+.row:first-of-type { border-top: 0; }
+.row .l { flex: 1; min-width: 0; } .row .r { text-align: right; }
+.sym { font-weight: 700; } .sub { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chip { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12.5px; font-weight: 600; min-width: 64px; text-align: center; }
+.chip.up { background: rgba(52,211,153,.14); } .chip.down { background: rgba(248,113,113,.14); }
+.tag { display: inline-block; padding: 2px 7px; border-radius: 6px; font-size: 11.5px; font-weight: 600; background: var(--card2); color: var(--muted); }
+.tag.good { color: var(--up); } .tag.bad { color: var(--down); } .tag.voice { color: var(--accent); }
+.grid2 { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+.stat { background: var(--card2); border-radius: 12px; padding: 10px; }
+.stat .k { color: var(--muted); font-size: 12px; } .stat .v { font-weight: 700; font-size: 17px; margin-top: 2px; }
+.tabs { display: flex; gap: 6px; margin: 4px 0 12px; }
+.tabs button, .seg button { flex: 1; background: var(--card); border: 1px solid var(--line); color: var(--muted); border-radius: 10px; padding: 9px; font-weight: 600; font-size: 14px; }
+.tabs button.on, .seg button.on { color: var(--bg); background: var(--accent); border-color: var(--accent); }
+.seg { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+.seg button { flex: 0 0 auto; padding: 6px 10px; font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-align: right; padding: 6px 4px; }
+td { text-align: right; padding: 9px 4px; border-top: 1px solid var(--line); font-size: 14px; }
+th:first-child, td:first-child { text-align: left; }
+tr.atm td { background: rgba(110,160,255,.07); }
+tr.pick td { background: rgba(94,234,212,.16); }
+tr.pick td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.btn { display: block; width: 100%; border: 0; border-radius: 14px; padding: 15px; font-size: 16px; font-weight: 700; margin-top: 10px; }
+.btn.go { background: var(--up); color: #05210f; } .btn.ghost { background: var(--card2); color: var(--fg); } .btn.sell { background: var(--down); color: #2a0606; }
+.flash { animation: flash 1.6s ease-out 1; }
+@keyframes flash { 0% { box-shadow: 0 0 0 2px var(--accent), 0 0 24px rgba(94,234,212,.45); } 100% { box-shadow: 0 0 0 0 transparent; } }
+.agent { display: none; align-items: center; gap: 6px; font-size: 12px; color: var(--accent); margin: -2px 0 10px; }
+.agent.on { display: flex; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.tickrow { display: flex; justify-content: space-between; padding: 9px 0; border-top: 1px solid var(--line); }
+.tickrow:first-of-type { border-top: 0; } .tickrow .k { color: var(--muted); }
+.banner { text-align: center; padding: 18px 8px 6px; } .banner .ok { font-size: 44px; }
+.note { color: var(--muted); font-size: 12px; text-align: center; margin-top: 10px; }
+nav.tabbar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; background: rgba(11,15,20,.96); border-top: 1px solid var(--line); z-index: 4; }
+nav.tabbar button { flex: 1; background: none; border: 0; color: var(--muted); padding: 10px 0 12px; font-size: 12px; font-weight: 600; }
+nav.tabbar button.on { color: var(--accent); }
+nav.tabbar svg { display: block; margin: 0 auto 2px; }
+.news { padding: 9px 0; border-top: 1px solid var(--line); } .news:first-of-type { border-top: 0; }
+.gauge { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--up) 0 30%, #3b4a5c 30% 70%, var(--down) 70%); position: relative; margin: 8px 0 4px; }
+.gauge i { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--fg); }
+.empty { color: var(--muted); padding: 30px 0; text-align: center; }
+.err { color: var(--down); padding: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="back" id="back" onclick="UI.back()">&#8249;</span>
+  <span class="title" id="title">Leaps</span>
+  <span class="acct" id="acct"></span>
+</header>
+<main id="view"><div class="empty">Loading…</div></main>
+<nav class="tabbar" id="tabbar">
+  <button id="tab-home" onclick="UI.go({screen:'home'})">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+  <button id="tab-activity" onclick="UI.go({screen:'activity'})">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Activity</button>
+</nav>
+<script>
+"use strict";
+const P = new URLSearchParams(location.hash.slice(1));
+const S = { session: P.get("s") || "demo", key: P.get("k") || "", stack: [], cur: null, chart: "1D", sym: null };
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const money = (v, d = 2) => (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
+const smoney = (v) => (v >= 0 ? "+" : "") + money(v);
+const pct = (v) => (v >= 0 ? "+" : "") + Number(v).toFixed(2) + "%";
+const cls = (v) => (v >= 0 ? "up" : "down");
+const RULE = { this_week: "This week", next_week: "Next week", monthly: "Monthly", nearest: "Nearest" };
+const fmtDate = (iso) => { const d = new Date(iso + "T12:00:00"); return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }); };
+
+async function api(path, opts = {}) {
+  const sep = path.includes("?") ? "&" : "?";
+  const r = await fetch(path + sep + "session=" + encodeURIComponent(S.session),
+    { ...opts, headers: { "X-Passcode": S.key, "Content-Type": "application/json", ...(opts.headers || {}) } });
+  if (!r.ok) throw new Error(r.status + " " + (await r.text()).slice(0, 120));
+  return r.json();
+}
+
+function spark(vals, w = 70, h = 28, color) {
+  if (!vals || vals.length < 2) return "";
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const pts = vals.map((v, i) => `${(i / (vals.length - 1) * w).toFixed(1)},${(h - (v - lo) / span * h).toFixed(1)}`).join(" ");
+  const c = color || (vals[vals.length - 1] >= vals[0] ? "var(--up)" : "var(--down)");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline fill="none" stroke="${c}" stroke-width="1.6" points="${pts}"/></svg>`;
+}
+
+function chart(vals, lines = [], upOverride = null, w = 340, h = 170) {
+  const all = vals.concat(lines.map((l) => l.v));
+  const lo = Math.min(...all) * 0.998, hi = Math.max(...all) * 1.002, span = hi - lo || 1;
+  const y = (v) => (h - 14 - (v - lo) / span * (h - 24)).toFixed(1);
+  const x = (i) => (i / (vals.length - 1) * w).toFixed(1);
+  const up = upOverride ?? (vals[vals.length - 1] >= vals[0]), c = up ? "#34d399" : "#f87171";
+  const pts = vals.map((v, i) => `${x(i)},${y(v)}`).join(" ");
+  const area = `0,${h} ` + pts + ` ${w},${h}`;
+  const ls = lines.map((l) => `<line x1="0" x2="${w}" y1="${y(l.v)}" y2="${y(l.v)}" stroke="${l.c}" stroke-dasharray="5 4" stroke-width="1"/>
+    <text x="${w - 2}" y="${Number(y(l.v)) - 4}" fill="${l.c}" font-size="10.5" text-anchor="end">${esc(l.t)} ${l.v.toFixed(2)}</text>`).join("");
+  return `<svg width="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" style="display:block">
+    <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${c}" stop-opacity=".28"/><stop offset="1" stop-color="${c}" stop-opacity="0"/></linearGradient></defs>
+    <polygon fill="url(#g)" points="${area}"/><polyline fill="none" stroke="${c}" stroke-width="2" points="${pts}"/>${ls}</svg>`;
+}
+
+function setHeader(title, back) {
+  $("title").textContent = title;
+  $("back").style.display = back ? "inline" : "none";
+  $("tab-home").classList.toggle("on", S.cur && S.cur.screen === "home");
+  $("tab-activity").classList.toggle("on", S.cur && S.cur.screen === "activity");
+}
+
+function agentNote(byAgent, text) {
+  return `<div class="agent ${byAgent ? "on" : ""}"><span class="dot"></span>${esc(text || "Opened by Leaps")}</div>`;
+}
+
+function flash(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+}
+
+// ------------------------------------------------------------------ screens
+async function renderHome(nav) {
+  const d = await api("/ui/home");
+  $("acct").textContent = "";
+  setHeader("Leaps", false);
+  const hl = new Set(nav.highlight || []);
+  const pos = d.positions.map((p) => `<div class="row" onclick="UI.go({screen:'symbol',symbol:'${p.symbol}'})">
+      <div class="l"><div class="sym">${esc(p.label)}</div><div class="sub">${p.qty} ${p.kind === "option" ? "contract" + (p.qty > 1 ? "s" : "") : "shares"} · avg ${money(p.avg_cost)}</div></div>
+      <div class="r"><div>${money(p.value, 0)}</div><div class="${cls(p.pnl)}" style="font-size:12.5px">${smoney(p.pnl)} (${pct(p.pnl_pct)})</div></div></div>`).join("");
+  const wl = d.watchlist.map((w) => `<div class="row" id="w-${w.symbol}" onclick="UI.go({screen:'symbol',symbol:'${w.symbol}'})"
+      style="${hl.has(w.symbol) ? "background:rgba(94,234,212,.10);border-radius:10px;padding-left:8px;padding-right:8px" : ""}">
+      <div class="l"><div class="sym">${w.symbol}${hl.has(w.symbol) ? ' <span class="tag voice">match</span>' : ""}</div><div class="sub">${esc(w.name)}</div></div>
+      ${spark(w.spark, 70, 28, w.change_pct >= 0 ? "var(--up)" : "var(--down)")}<div class="r" style="min-width:86px"><div>${money(w.price)}</div><span class="chip ${cls(w.change_pct)}">${pct(w.change_pct)}</span></div></div>`).join("");
+  const ords = d.orders.length ? d.orders.map(orderRow).join("") : `<div class="sub" style="padding:6px 0">No orders today.</div>`;
+  $("view").innerHTML = `${agentNote(nav.byAgent)}
+    <div class="card" id="sec-account"><div class="muted" style="font-size:13px">Account value</div>
+      <div class="big">${money(d.total)}</div>
+      <div class="${cls(d.day_pnl)}" style="font-weight:600">${smoney(d.day_pnl)} (${pct(d.day_pct)}) today</div>
+      <div class="grid2" style="margin-top:12px"><div class="stat"><div class="k">Cash</div><div class="v">${money(d.cash)}</div></div>
+      ${d.index ? `<div class="stat"><div class="k">${d.index.symbol}</div><div class="v">${money(d.index.price)} <span class="${cls(d.index.change_pct)}" style="font-size:13px">${pct(d.index.change_pct)}</span></div></div>` : ""}</div></div>
+    <div class="card" id="sec-positions"><h3>Positions</h3>${pos || '<div class="sub">No positions.</div>'}</div>
+    <div class="card" id="sec-watchlist"><h3>Watchlist</h3>${wl}</div>
+    <div class="card" id="sec-orders"><h3>Recent orders</h3>${ords}</div>
+    <div class="note">Mock market as of ${esc(d.as_of)} ET · demo account</div>`;
+  if (nav.byAgent) flash("sec-" + (nav.section === "market" ? "account" : nav.section || "positions"));
+}
+
+function orderRow(o) {
+  const st = o.status === "filled" ? "good" : "";
+  return `<div class="row"><div class="l"><div class="sym">${o.direction.toUpperCase()} ${o.qty} ${esc(o.label)}</div>
+    <div class="sub">${o.day} · ${money(o.price)}${o.voice ? ' · <span class="tag voice">via voice</span>' : ""}</div></div>
+    <div class="r"><span class="tag ${st}">${o.status}</span></div></div>`;
+}
+
+async function renderSymbol(nav) {
+  const sym = nav.symbol;
+  const d = await api("/ui/symbol/" + encodeURIComponent(sym));
+  S.sym = d;
+  setHeader(d.symbol, true);
+  $("acct").innerHTML = `${money(d.price)}`;
+  const tab = nav.tab || "overview";
+  const rng = S.chart in d.chart ? S.chart : "1D";
+  const lines = d.levels ? [{ v: d.levels.support, c: "#34d399", t: "S" }, { v: d.levels.resistance, c: "#f87171", t: "R" }] : [];
+  const head = `${agentNote(nav.byAgent)}
+    <div class="card" id="sec-chart"><div class="muted" style="font-size:13px">${esc(d.name)}</div>
+      <div class="big">${money(d.price)}</div><div class="${cls(d.change_pct)}" style="font-weight:600">${pct(d.change_pct)} today</div>
+      <div style="margin:10px -4px 4px">${chart(d.chart[rng].c, rng === "1D" ? [{ v: d.prev_close, c: "#8796a8", t: "prev" }] : lines, rng === "1D" ? d.change_pct >= 0 : null)}</div>
+      <div class="seg">${["1D", "3M", "6M"].map((r) => `<button class="${r === rng ? "on" : ""}" onclick="UI.setRange('${r}')">${r}</button>`).join("")}</div></div>
+    ${d.quote_only ? "" : `<div class="tabs"><button class="${tab === "overview" ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${sym}',tab:'overview'},true)">Overview</button>
+      ${d.options ? `<button class="${tab === "options" ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${sym}',tab:'options'},true)">Options</button>` : ""}</div>`}`;
+  let body = "";
+  if (tab === "options" && d.options) {
+    body = await optionsBody(d, nav);
+  } else if (!d.quote_only) {
+    const ind = d.indicators, lv = d.levels, f = d.fundamentals;
+    const posHtml = d.positions.length ? `<div class="card" id="sec-position"><h3>Your position</h3>${d.positions.map((p) => `<div class="row"><div class="l"><div class="sym">${esc(p.label)}</div>
+        <div class="sub">${p.qty} ${p.kind === "option" ? "contracts" : "shares"} · avg ${money(p.avg_cost)}</div></div>
+        <div class="r"><div>${money(p.value, 0)}</div><div class="${cls(p.pnl)}" style="font-size:12.5px">${smoney(p.pnl)} (${pct(p.pnl_pct)})</div></div></div>`).join("")}</div>` : "";
+    body = `${posHtml}
+      <div class="card" id="sec-indicators"><h3>Technicals · daily</h3>
+        <div style="display:flex;justify-content:space-between"><span>RSI 14 <b>${ind.rsi}</b></span><span class="tag ${ind.rsi_state === "overbought" ? "bad" : ind.rsi_state === "oversold" ? "good" : ""}">${ind.rsi_state}</span></div>
+        <div class="gauge"><i style="left:calc(${Math.min(100, Math.max(0, ind.rsi))}% - 2px)"></i></div>
+        <div class="grid2" style="margin-top:12px">
+          <div class="stat"><div class="k">EMA 9 / 21 / 50</div><div class="v" style="font-size:14px">${ind.ema9.toFixed(2)} · ${ind.ema21.toFixed(2)} · ${ind.ema50.toFixed(2)}</div><div class="sub">${esc(ind.trend.replace("twenty-one", "21"))}</div></div>
+          <div class="stat"><div class="k">Volume</div><div class="v">${ind.vol_ratio.toFixed(2)}×</div><div class="sub">${esc(ind.volume)} vs average</div></div></div></div>
+      <div class="card" id="sec-levels"><h3>Support &amp; resistance</h3><div class="grid2">
+        <div class="stat"><div class="k">Support</div><div class="v up">${money(lv.support)}</div><div class="sub">${lv.dist_support.toFixed(1)}% below${lv.near_support === "yes" ? " · near" : ""}</div></div>
+        <div class="stat"><div class="k">Resistance</div><div class="v down">${money(lv.resistance)}</div><div class="sub">${lv.dist_resistance.toFixed(1)}% above${lv.near_resistance === "yes" ? " · near" : ""}</div></div></div></div>
+      <div class="card" id="sec-news"><h3>News · <span class="tag ${d.news.tone === "positive" ? "good" : d.news.tone === "negative" ? "bad" : ""}">${d.news.tone}</span></h3>
+        ${d.news.items.map((n) => `<div class="news"><div>${esc(n.headline)}</div><div class="sub">${n.age_hours < 1 ? "under an hour" : Math.round(n.age_hours) + "h"} ago</div></div>`).join("")}</div>
+      <div class="card" id="sec-fundamentals"><h3>Fundamentals</h3><div class="grid2">
+        <div class="stat"><div class="k">Market cap</div><div class="v">${(f.market_cap / 1e9).toFixed(1)}B</div></div>
+        <div class="stat"><div class="k">P/E</div><div class="v">${f.pe} <span class="sub">${f.valuation}</span></div></div>
+        <div class="stat"><div class="k">Analyst target</div><div class="v">${money(f.target)}</div><div class="sub">${pct(f.dist_target)}</div></div>
+        <div class="stat"><div class="k">Earnings</div><div class="v">${fmtDate(f.earnings_date)}</div></div></div></div>`;
+  }
+  const trade = d.quote_only ? "" : `<div class="grid2"><button class="btn go" onclick="UI.trade('${sym}','buy')">Buy</button><button class="btn sell" onclick="UI.trade('${sym}','sell')">Sell</button></div>`;
+  $("view").innerHTML = head + body + trade;
+  if (nav.byAgent) {
+    if (tab === "options") flash("sec-options");
+    else flash("sec-" + ((nav.sections || []).find((s) => s !== "chart") || "chart"));
+  }
+}
+
+async function optionsBody(d, nav) {
+  const rule = nav.expiry_rule || "nearest", side = nav.side || "call";
+  let c;
+  try { c = await api(`/ui/chain?symbol=${d.symbol}&expiry_rule=${rule}&side=${side}` + (nav.strike ? `&strike=${nav.strike}` : "")); }
+  catch (e) { return `<div class="card err">${esc(e.message)}</div>`; }
+  const exps = (d.expiries || []).map((e) => `<button class="${e.rule === rule ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${d.symbol}',tab:'options',expiry_rule:'${e.rule}',side:'${side}'},true)">${RULE[e.rule]} · ${fmtDate(e.date)}</button>`).join("");
+  const sides = ["call", "put"].map((s) => `<button class="${s === side ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${d.symbol}',tab:'options',expiry_rule:'${rule}',side:'${s}'},true)">${s === "call" ? "Calls" : "Puts"}</button>`).join("");
+  const most = Math.max(...c.rows.map((r) => r.oi));
+  const atm = c.rows.reduce((a, r) => (Math.abs(r.strike - c.price) < Math.abs(a.strike - c.price) ? r : a), c.rows[0] || {});
+  const rows = c.rows.map((r) => `<tr class="${nav.strike && Math.abs(r.strike - nav.strike) < 1e-6 ? "pick" : r === atm ? "atm" : ""}" onclick="UI.tradeOption('${d.symbol}','${side}','${rule}',${r.strike})">
+      <td><b>${r.strike}</b>${r.oi === most ? ' <span class="tag voice">top OI</span>' : ""}</td><td>${r.bid.toFixed(2)}</td><td>${r.ask.toFixed(2)}</td><td>${r.delta.toFixed(2)}</td><td>${r.iv.toFixed(0)}%</td><td>${r.oi.toLocaleString()}</td></tr>`).join("");
+  return `<div class="card" id="sec-options"><h3>${side === "call" ? "Calls" : "Puts"} · expiring ${fmtDate(c.expiry)}</h3>
+    <div class="seg">${exps}</div><div class="seg">${sides}</div>
+    <table><tr><th>Strike</th><th>Bid</th><th>Ask</th><th>Δ</th><th>IV</th><th>OI</th></tr>${rows}</table>
+    <div class="sub" style="margin-top:8px">IV ${esc(c.iv_level)} · liquidity ${esc(c.liquidity)} · tap a strike to trade</div></div>`;
+}
+
+async function renderTicket(nav) {
+  const t = await api("/ui/ticket/" + encodeURIComponent(nav.ticket_id));
+  setHeader(t.status === "submitted" ? "Order submitted" : "Review order", true);
+  $("acct").textContent = "";
+  const what = t.kind === "option" ? `${t.symbol} ${t.strike} ${t.side} · ${fmtDate(t.expiry)}` : `${t.symbol} shares`;
+  const unit = t.kind === "option" ? (t.qty > 1 ? "contracts" : "contract") : (t.qty > 1 ? "shares" : "share");
+  const rows = [["Action", `<b class="${t.direction === "buy" ? "up" : "down"}">${t.direction.toUpperCase()}</b>`], ["Instrument", esc(what)],
+    ["Quantity", `${t.qty} ${unit}`], ["Order type", t.order_type === "limit" ? `Limit ${money(t.limit_price)}` : "Market"],
+    ["Est. price", money(t.est_price) + (t.kind === "option" ? " / share" : "")], ["Est. " + (t.direction === "buy" ? "cost" : "proceeds"), `<b>${money(t.est_cost)}</b>`],
+    ["Buying power", money(t.buying_power)]];
+  const table = `<div class="card">${rows.map(([k, v]) => `<div class="tickrow"><span class="k">${k}</span><span>${v}</span></div>`).join("")}</div>`;
+  let body;
+  if (t.status === "submitted") {
+    body = `<div class="banner"><div class="ok up">&#10003;</div><div class="big" style="font-size:22px">Order ${t.order_status === "filled" ? "filled" : "placed"}</div>
+      <div class="muted">${t.direction === "buy" ? "Bought" : "Sold"} ${t.qty} ${esc(what)} at about ${money(t.est_price)}</div></div>${table}
+      <button class="btn ghost" onclick="UI.go({screen:'activity'})">View activity</button>`;
+  } else if (t.status === "cancelled") {
+    body = `<div class="banner"><div class="big" style="font-size:22px">Ticket cancelled</div></div>${table}`;
+  } else {
+    body = `${agentNote(nav.byAgent, "Drafted by Leaps from your voice · review before sending")}
+      <div class="card" style="text-align:center"><div class="muted">${esc(t.name)}</div><div class="big" style="font-size:24px">${t.direction === "buy" ? "Buy" : "Sell"} ${t.qty} ${esc(what)}</div>
+      <div class="muted" style="font-size:13px">${t.symbol} ${money(t.price)} <span class="${cls(t.change_pct)}">${pct(t.change_pct)}</span></div></div>
+      ${table}<button class="btn go" id="confirm" onclick="UI.confirm('${t.ticket_id}')">Confirm &amp; send</button>
+      <button class="btn ghost" onclick="UI.cancel('${t.ticket_id}')">Cancel</button>
+      <div class="note">Demo account · nothing is sent to a real broker</div>`;
+  }
+  $("view").innerHTML = body;
+  if (nav.byAgent && t.status !== "submitted") flash("confirm");
+}
+
+async function renderActivity(nav) {
+  const d = await api("/ui/activity");
+  setHeader("Activity", false);
+  $("acct").textContent = "";
+  const tk = d.tickets.filter((t) => t.status === "needs confirmation");
+  $("view").innerHTML = `${agentNote(nav.byAgent)}
+    ${tk.length ? `<div class="card"><h3>Waiting for your confirmation</h3>${tk.map((t) => `<div class="row" onclick="UI.go({screen:'ticket',ticket_id:'${t.ticket_id}'})">
+      <div class="l"><div class="sym">${t.direction.toUpperCase()} ${t.qty} ${t.kind === "option" ? `${t.symbol} ${t.strike} ${t.side}` : t.symbol}</div><div class="sub">ticket ${t.ticket_id}</div></div>
+      <div class="r"><span class="tag voice">review</span></div></div>`).join("")}</div>` : ""}
+    <div class="card" id="sec-orders"><h3>Orders</h3>${d.orders.length ? d.orders.map(orderRow).join("") : '<div class="sub">No orders.</div>'}</div>`;
+  if (nav.byAgent) flash("sec-orders");
+}
+
+// ------------------------------------------------------------------ navigation
+const RENDER = { home: renderHome, symbol: renderSymbol, ticket: renderTicket, activity: renderActivity };
+
+async function show(nav) {
+  S.cur = nav;
+  try { await RENDER[nav.screen](nav); }
+  catch (e) { $("view").innerHTML = `<div class="card err">Couldn't load: ${esc(e.message)}</div>`; }
+  if (!nav.keepScroll && !nav.byAgent) window.scrollTo(0, 0);
+}
+
+window.UI = {
+  go(nav, replace) {
+    if (S.cur && !replace && JSON.stringify(S.cur) !== JSON.stringify(nav)) S.stack.push(S.cur);
+    if (nav.screen === "home" || nav.screen === "activity") S.stack = [];
+    show({ ...nav, byAgent: false });
+  },
+  back() { const p = S.stack.pop() || { screen: "home" }; show({ ...p, byAgent: false }); },
+  setRange(r) { S.chart = r; show({ ...S.cur, byAgent: false, keepScroll: true }); },
+  async trade(sym, dir) {
+    try { const t = await api("/ui/ticket", { method: "POST", body: JSON.stringify({ session: S.session, symbol: sym, direction: dir, qty: 1 }) });
+      UI.go({ screen: "ticket", ticket_id: t.ticket_id }); } catch (e) { alertBox(e); }
+  },
+  async tradeOption(sym, side, rule, strike) {
+    try { const t = await api("/ui/ticket", { method: "POST", body: JSON.stringify({ session: S.session, symbol: sym, direction: "buy", qty: 1, side, strike, expiry_rule: rule }) });
+      UI.go({ screen: "ticket", ticket_id: t.ticket_id }); } catch (e) { alertBox(e); }
+  },
+  async confirm(tid) {
+    const b = $("confirm"); if (b) { b.disabled = true; b.textContent = "Sending…"; }
+    try { await api(`/ui/ticket/${tid}/confirm`, { method: "POST" }); } catch (e) { alertBox(e); }
+    show({ screen: "ticket", ticket_id: tid, byAgent: false });
+    if (window.Leaps && Leaps.onConfirmed) Leaps.onConfirmed(tid);
+  },
+  async cancel(tid) {
+    try { await api(`/ui/ticket/${tid}/cancel`, { method: "POST" }); } catch (e) { alertBox(e); }
+    UI.back();
+  },
+};
+function alertBox(e) { $("view").insertAdjacentHTML("afterbegin", `<div class="card err">${esc(e.message)}</div>`); }
+
+// Called by the app: the agent's screen for this turn ({screen, ...} from the step server's "nav").
+window.LeapsUI = {
+  nav(n) {
+    if (!n || !RENDER[n.screen]) return;
+    if (S.cur && JSON.stringify({ ...S.cur, byAgent: 0, keepScroll: 0 }) !== JSON.stringify({ ...n, byAgent: 0, keepScroll: 0 })) S.stack.push(S.cur);
+    if (n.screen === "home" || n.screen === "activity") S.stack = [];
+    show({ ...n, byAgent: true });
+  },
+  refresh() { if (S.cur) show({ ...S.cur, byAgent: false, keepScroll: true }); },
+  reset(session) { if (session) S.session = session; S.stack = []; show({ screen: "home", byAgent: false }); },
+  back() { if (!S.stack.length) return false; UI.back(); return true; },
+};
+show({ screen: "home" }).then(() => { if (P.get("nav")) LeapsUI.nav(JSON.parse(P.get("nav"))); });   // nav=: preview hook
+</script>
+</body>
+</html>

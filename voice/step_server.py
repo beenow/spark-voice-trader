@@ -232,6 +232,8 @@ class Session:
 
     def start(self, question: str) -> None:
         self.outbox, self.inbox, self.events = queue.Queue(), queue.Queue(), []
+        self.turn_events: list[dict] = []          # this turn's events so far, for the screen to show (nav)
+        self.ticket_mark = len(self.world.tickets)
         self.backend = RemoteBackend(self.pb, self.outbox, self.inbox, self.frame_line)
         be, world = self.backend, self.world
 
@@ -279,6 +281,8 @@ class Session:
         item = self.outbox.get(timeout=PHONE_TIMEOUT_S + 30)
         events, self.events = self.events, []
         events = [_plain(e) for e in events]
+        self.turn_events = getattr(self, "turn_events", []) + events
+        nav = self.nav()
         if "prompt" in item:
             hint, self.last_hint = getattr(self, "last_hint", None), None
             if hint and len(self.backend.stats) == 0:      # first step of a turn: how much of the hint held
@@ -291,7 +295,8 @@ class Session:
                 else:
                     log.info("next_prefix hit: %d/%d tokens", i, len(toks))
             return {"prompt": item["prompt"], "tokens": item["tokens"], "max_tokens": MAX_TOKENS,
-                    "answer_max_tokens": ANSWER_MAX_TOKENS, "step": len(self.backend.stats) + 1, "events": events}
+                    "answer_max_tokens": ANSWER_MAX_TOKENS, "step": len(self.backend.stats) + 1, "events": events,
+                    **({"nav": nav} if nav else {})}
         if "error" in item:
             return {"say": "Sorry, I couldn't get that.", "display": "", "error": item["error"], "events": events}
         res = item["result"]
@@ -301,7 +306,24 @@ class Session:
                 "timings": {"mac_total_s": round(item["total_s"], 3),
                             "tools_s": [round(x, 4) for x in tm.get("tools") or []],
                             "decides": self.backend.stats if self.backend else []},
-                "next_prefix": self._hint()}
+                "next_prefix": self._hint(), **({"nav": nav} if nav else {})}
+
+    def nav(self) -> dict | None:
+        """The screen for this turn so far (voice.ui_api.nav_for), from the executed tool calls: sent with the
+        reply that follows a tool step, so the phone shows it while the answer is generated and spoken."""
+        from voice.ui_api import nav_for
+        ok = {e.get("tool") for e in self.turn_events if e.get("type") == "tool_result" and e.get("ok")}
+        calls = [{"tool": e["tool"], "args": e.get("args") or {}} for e in self.turn_events
+                 if e.get("type") == "tool_call" and e.get("tool") in ok]
+        new = list(self.world.tickets)[getattr(self, "ticket_mark", len(self.world.tickets)):]
+        matches = [m.get("symbol") for e in self.turn_events
+                   if e.get("type") == "tool_result" and e.get("tool") == "screen_watchlist"
+                   for m in (e.get("words") or {}).get("matches", []) if isinstance(m, dict)]
+        try:
+            return nav_for(calls, new[-1] if new else None, matches)
+        except Exception:  # noqa: BLE001 -- a screen hint must never cost the phone its answer
+            log.exception("nav failed")
+            return None
 
     def _hint(self) -> list[int]:
         self.last_hint = self.next_prefix()
@@ -332,6 +354,17 @@ class Session:
 def _plain(v: Any) -> Any:
     import json
     return json.loads(json.dumps(v, default=lambda o: o.item() if hasattr(o, "item") else str(o)))
+
+
+class TicketRequest(BaseModel):
+    session: str
+    symbol: str
+    direction: str = "buy"
+    qty: int = 1
+    type: str = "market"
+    side: str | None = None
+    strike: float | None = None
+    expiry_rule: str | None = None
 
 
 class StepRequest(BaseModel):
@@ -410,17 +443,78 @@ def create_app(model: str = "llama-1b-loop", passcode: str | None = None, tokeni
             raise HTTPException(404, "no such model")
         return FileResponse(served[name], media_type="application/octet-stream", filename=name)
 
-    @app.post("/step")
-    def step(req: StepRequest, x_passcode: str = Header(default="")):
-        check(x_passcode)
+    def session_for(sid: str) -> Session:
         with glock:
             now = time.time()
             for k in [k for k, s in sessions.items() if now - s.touched > SESSION_TTL_S and not s.busy()]:
                 sessions.pop(k)
-            sess = sessions.get(req.session)
+            sess = sessions.get(sid)
             if sess is None:
-                sess = sessions[req.session] = Session(world_factory(), frame_line, pb, req.session, turn_log)
+                sess = sessions[sid] = Session(world_factory(), frame_line, pb, sid, turn_log)
             sess.touched = now
+            return sess
+
+    # ---- trading UI screens (voice.ui_api): the same per-session World the agent's tools read
+    from voice import ui_api
+
+    def ui(sid: str, x_passcode: str, f):
+        check(x_passcode)
+        sess = session_for(sid)
+        try:
+            return _plain(f(sess))
+        except KeyError as e:
+            raise HTTPException(404, f"not found: {e}")
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+
+    ui_static = Path(__file__).parent / "ui_static"
+
+    @app.get("/ui/app/{name}")
+    def ui_app(name: str):
+        """The trading UI page itself (no secrets in it: the passcode comes in the URL fragment, never sent here)."""
+        f = ui_static / name
+        if "/" in name or not f.is_file():
+            raise HTTPException(404, "no such file")
+        return FileResponse(f, headers={"Cache-Control": "no-store"})
+
+    @app.get("/ui/home")
+    def ui_home(session: str, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.home(s.world, s.conv.watchlist))
+
+    @app.get("/ui/symbol/{sym}")
+    def ui_symbol(sym: str, session: str, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.symbol_page(s.world, sym.upper()))
+
+    @app.get("/ui/chain")
+    def ui_chain(session: str, symbol: str, expiry_rule: str = "nearest", side: str = "call",
+                 strike: float | None = None, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.chain(s.world, symbol.upper(), expiry_rule, side, strike))
+
+    @app.get("/ui/activity")
+    def ui_activity(session: str, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.activity(s.world))
+
+    @app.get("/ui/ticket/{tid}")
+    def ui_ticket(tid: str, session: str, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.ticket(s.world, tid))
+
+    @app.post("/ui/ticket/{tid}/confirm")
+    def ui_confirm(tid: str, session: str, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.confirm(s.world, tid))
+
+    @app.post("/ui/ticket/{tid}/cancel")
+    def ui_cancel(tid: str, session: str, x_passcode: str = Header(default="")):
+        return ui(session, x_passcode, lambda s: ui_api.cancel(s.world, tid))
+
+    @app.post("/ui/ticket")
+    def ui_new_ticket(req: TicketRequest, x_passcode: str = Header(default="")):
+        return ui(req.session, x_passcode, lambda s: ui_api.new_ticket(
+            s.world, req.symbol.upper(), req.direction, req.qty, req.type, req.side, req.strike, req.expiry_rule))
+
+    @app.post("/step")
+    def step(req: StepRequest, x_passcode: str = Header(default="")):
+        check(x_passcode)
+        sess = session_for(req.session)
         with sess.lock:
             if req.reset:
                 if sess.busy():
