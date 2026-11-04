@@ -61,6 +61,13 @@ nav.tabbar button { flex: 1; background: none; border: 0; color: var(--muted); p
 nav.tabbar button.on { color: var(--accent); }
 nav.tabbar svg { display: block; margin: 0 auto 2px; }
 .news { padding: 9px 0; border-top: 1px solid var(--line); } .news:first-of-type { border-top: 0; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 4px 0 2px; }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 5px; }
+.legend .hl { color: var(--fg); font-weight: 700; }
+.rsi { margin-top: 6px; border-radius: 10px; padding: 4px 0 0; }
+.rsi.hl { box-shadow: 0 0 0 2px var(--accent), 0 0 22px rgba(94,234,212,.35); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+.pulse { animation: pulse 1.1s ease-in-out 3; }
 .gauge { height: 8px; border-radius: 4px; background: linear-gradient(90deg, var(--up) 0 30%, #3b4a5c 30% 70%, var(--down) 70%); position: relative; margin: 8px 0 4px; }
 .gauge i { position: absolute; top: -4px; width: 4px; height: 16px; border-radius: 2px; background: var(--fg); }
 .empty { color: var(--muted); padding: 30px 0; text-align: center; }
@@ -178,6 +185,86 @@ function orderRow(o) {
     <div class="r"><span class="tag ${st}">${o.status}</span></div></div>`;
 }
 
+// ---- technical chart: price + EMA 9/21/50 + support/resistance lines, RSI panel below (30/70 guides)
+const EMA_C = { 9: "#fbbf24", 21: "#6ea0ff", 50: "#c084fc" };
+function emaSeries(x, n) { const a = 2 / (n + 1); let e = x[0]; return x.map((v, i) => (i ? (e = a * v + (1 - a) * e) : e)); }
+function rsiSeries(x, n = 14) {          // Wilder, as tools/impl.rsi: the last value equals the spoken one
+  const out = new Array(x.length).fill(null); if (x.length < n + 2) return out;
+  const d = x.slice(1).map((v, i) => v - x[i]);
+  let au = 0, ad = 0; for (let i = 0; i < n; i++) { au += Math.max(d[i], 0); ad += Math.max(-d[i], 0); }
+  au /= n; ad /= n;
+  const val = () => (ad === 0 ? (au > 0 ? 100 : 50) : 100 - 100 / (1 + au / ad));
+  out[n] = val();
+  for (let i = n; i < d.length; i++) { au = (au * (n - 1) + Math.max(d[i], 0)) / n; ad = (ad * (n - 1) + Math.max(-d[i], 0)) / n; out[i + 1] = val(); }
+  return out;
+}
+function chartFocus(nav) {
+  if (nav.focus) return nav.focus;
+  const s = nav.sections || [], f = [];
+  if (s.includes("levels")) f.push("support", "resistance");
+  if (s.includes("indicators")) f.push("rsi", "ema");
+  return f;
+}
+function techData(d, rng) {
+  // daily views: series over the 6M closes (EMAs pinned so today's value is the tool's), shown for the range
+  if (rng === "1D") {
+    const c = d.chart["1D"].c;
+    return { c, ema: { 9: emaSeries(c, 9), 21: emaSeries(c, 21), 50: emaSeries(c, 50) }, rsi: rsiSeries(c), tf: "5-min" };
+  }
+  const all = d.chart["6M"].c, k = rng === "3M" ? d.chart["3M"].c.length : all.length, ema = {};
+  for (const n of [9, 21, 50]) {
+    const e = emaSeries(all, n), want = d.indicators ? d.indicators["ema" + n] : null;
+    const off = want == null ? 0 : want - e[e.length - 1];
+    ema[n] = e.map((v) => v + off).slice(-k);
+  }
+  const r = rsiSeries(all.slice(-120));
+  return { c: all.slice(-k), ema, rsi: r.slice(-k), tf: "daily" };
+}
+function techChart(d, rng, focus) {
+  const t = techData(d, rng), w = 340, h = 190, F = new Set(focus || []), any = F.size > 0;
+  const lv = d.levels ? [{ key: "support", v: d.levels.support, c: "#34d399", t: "Support" }, { key: "resistance", v: d.levels.resistance, c: "#f87171", t: "Resistance" }] : [];
+  if (rng === "1D") lv.push({ key: "prev", v: d.prev_close, c: "#8796a8", t: "Prev close" });
+  const vis = t.c.concat(lv.map((l) => l.v), ...[9, 21, 50].map((n) => t.ema[n]));
+  const lo = Math.min(...vis) * 0.997, hi = Math.max(...vis) * 1.003, span = hi - lo || 1;
+  const PR = 268;                                         // plot width; labels sit to the right
+  const x = (i) => (i / (t.c.length - 1) * PR).toFixed(1), y = (v) => (h - 10 - (v - lo) / span * (h - 20)).toFixed(1);
+  const up = rng === "1D" ? d.change_pct >= 0 : t.c[t.c.length - 1] >= t.c[0], pc = up ? "#34d399" : "#f87171";
+  const line = (arr) => arr.map((v, i) => (v == null ? "" : `${x(i)},${y(v)}`)).filter(Boolean).join(" ");
+  const emaOn = F.has("ema");
+  const emas = [50, 21, 9].map((n) => `<polyline fill="none" stroke="${EMA_C[n]}" stroke-width="${emaOn ? 2.2 : 1.1}" opacity="${any && !emaOn ? 0.35 : 0.9}" points="${line(t.ema[n])}" class="${emaOn ? "pulse" : ""}"/>`).join("");
+  // label slots: keep the price tags at least 20px apart (S and R can sit close together)
+  const tags = lv.map((l) => ({ l, yy: Number(y(l.v)) })).sort((p, q) => p.yy - q.yy);
+  for (let i = 1; i < tags.length; i++) if (tags[i].yy - tags[i - 1].yy < 20) tags[i].ly = (tags[i - 1].ly ?? tags[i - 1].yy) + 20;
+  for (const t of tags) t.ly = Math.min(t.ly ?? t.yy, h - 10);
+  for (let i = tags.length - 2; i >= 0; i--) if ((tags[i + 1].ly) - (tags[i].ly ?? tags[i].yy) < 20) tags[i].ly = tags[i + 1].ly - 20;
+  const tagY = new Map(tags.map((t) => [t.l.key, t.ly ?? t.yy]));
+  const lvl = lv.map((l) => { const on = F.has(l.key), yy = Number(y(l.v)), ty = tagY.get(l.key);
+    return `<g class="${on ? "pulse" : ""}" opacity="${any && !on ? 0.5 : 1}"><line x1="0" x2="${PR}" y1="${yy}" y2="${yy}" stroke="${l.c}" stroke-dasharray="${on ? "0" : "5 4"}" stroke-width="${on ? 2.2 : 1.2}"/>
+      <line x1="${PR}" x2="${PR + 3}" y1="${yy}" y2="${ty}" stroke="${l.c}" stroke-width="1.2"/>
+      <rect x="${PR + 3}" y="${ty - 9}" width="${w - PR - 4}" height="18" rx="5" fill="${l.c}" opacity="${on ? 1 : 0.85}"/>
+      <text x="${PR + 6}" y="${ty + 4}" font-size="11" font-weight="700" fill="#0b0f14">${l.key === "prev" ? "prev" : l.key === "support" ? "S" : "R"} ${l.v.toFixed(2)}</text></g>`; }).join("");
+  const last = t.c[t.c.length - 1];
+  const main = `<svg width="100%" viewBox="0 0 ${w} ${h}" style="display:block">
+    <defs><linearGradient id="g" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="${pc}" stop-opacity=".22"/><stop offset="1" stop-color="${pc}" stop-opacity="0"/></linearGradient></defs>
+    <polygon fill="url(#g)" points="0,${h} ${line(t.c)} ${PR},${h}"/>${emas}
+    <polyline fill="none" stroke="${pc}" stroke-width="2" points="${line(t.c)}"/>${lvl}
+    <circle cx="${PR}" cy="${y(last)}" r="3.5" fill="${pc}"/></svg>`;
+  const rh = 64, ry = (v) => (rh - 4 - v / 100 * (rh - 8)).toFixed(1), rOn = F.has("rsi");
+  const rpts = t.rsi.map((v, i) => (v == null ? "" : `${x(i)},${ry(v)}`)).filter(Boolean).join(" ");
+  const rlast = t.rsi[t.rsi.length - 1];
+  const rsiShown = rng !== "1D" && d.indicators ? d.indicators.rsi : rlast;
+  const rsi = `<div class="rsi ${rOn ? "hl" : ""}" id="sec-rsi"><div class="legend" style="justify-content:space-between;padding:0 4px">
+      <span class="${rOn ? "hl" : ""}">RSI 14 · ${t.tf}</span><span class="${rOn ? "hl" : ""}">${rsiShown == null ? "–" : Number(rsiShown).toFixed(1)}${rsiShown >= 70 ? " overbought" : rsiShown <= 30 ? " oversold" : ""}</span></div>
+    <svg width="100%" viewBox="0 0 ${w} ${rh}" style="display:block">
+      <rect x="0" y="${ry(70)}" width="${PR}" height="${ry(30) - ry(70)}" fill="rgba(110,160,255,.07)"/>
+      <line x1="0" x2="${PR}" y1="${ry(70)}" y2="${ry(70)}" stroke="#f87171" stroke-dasharray="4 4" stroke-width="1"/>
+      <line x1="0" x2="${PR}" y1="${ry(30)}" y2="${ry(30)}" stroke="#34d399" stroke-dasharray="4 4" stroke-width="1"/>
+      <text x="${PR + 6}" y="${Number(ry(70)) + 4}" font-size="10.5" fill="#f87171">70</text><text x="${PR + 6}" y="${Number(ry(30)) + 4}" font-size="10.5" fill="#34d399">30</text>
+      <polyline fill="none" stroke="#5eead4" stroke-width="${rOn ? 2.4 : 1.6}" points="${rpts}" class="${rOn ? "pulse" : ""}"/></svg></div>`;
+  const legend = `<div class="legend">${[9, 21, 50].map((n) => `<span class="${emaOn ? "hl" : ""}"><i style="background:${EMA_C[n]}"></i>EMA ${n}${d.indicators && rng !== "1D" ? " " + d.indicators["ema" + n].toFixed(2) : ""}</span>`).join("")}</div>`;
+  return main + legend + rsi;
+}
+
 async function renderSymbol(nav) {
   const sym = nav.symbol;
   const d = await api("/ui/symbol/" + encodeURIComponent(sym));
@@ -185,12 +272,13 @@ async function renderSymbol(nav) {
   setHeader(d.symbol, true);
   $("acct").innerHTML = `${money(d.price)}`;
   const tab = nav.tab || "overview";
+  const focus = nav.byAgent ? chartFocus(nav) : [];
+  if (nav.byAgent && focus.length) S.chart = ["1H", "5m"].includes(nav.timeframe) ? "1D" : "3M";   // match the call
   const rng = S.chart in d.chart ? S.chart : "1D";
-  const lines = d.levels ? [{ v: d.levels.support, c: "#34d399", t: "S" }, { v: d.levels.resistance, c: "#f87171", t: "R" }] : [];
   const head = `${agentNote(nav.byAgent)}
     <div class="card" id="sec-chart"><div class="muted" style="font-size:13px">${esc(d.name)}</div>
       <div class="big">${money(d.price)}</div><div class="${cls(d.change_pct)}" style="font-weight:600">${pct(d.change_pct)} today</div>
-      <div style="margin:10px -4px 4px">${chart(d.chart[rng].c, rng === "1D" ? [{ v: d.prev_close, c: "#8796a8", t: "prev" }] : lines, rng === "1D" ? d.change_pct >= 0 : null)}</div>
+      <div style="margin:10px -4px 4px">${d.quote_only ? chart(d.chart[rng].c, [{ v: d.prev_close, c: "#8796a8", t: "prev" }], d.change_pct >= 0) : techChart(d, rng, focus)}</div>
       <div class="seg">${["1D", "3M", "6M"].map((r) => `<button class="${r === rng ? "on" : ""}" onclick="UI.setRange('${r}')">${r}</button>`).join("")}</div></div>
     ${d.quote_only ? "" : `<div class="tabs"><button class="${tab === "overview" ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${sym}',tab:'overview'},true)">Overview</button>
       ${d.options ? `<button class="${tab === "options" ? "on" : ""}" onclick="UI.go({screen:'symbol',symbol:'${sym}',tab:'options'},true)">Options</button>` : ""}</div>`}`;
@@ -203,7 +291,14 @@ async function renderSymbol(nav) {
         <div class="sub">${p.qty} ${p.kind === "option" ? "contracts" : "shares"} · avg ${money(p.avg_cost)}</div></div>
         <div class="r"><div>${money(p.value, 0)}</div><div class="${cls(p.pnl)}" style="font-size:12.5px">${smoney(p.pnl)} (${pct(p.pnl_pct)})</div></div></div>`).join("")}</div>` : "";
     body = `${posHtml}
-      <div class="card" id="sec-indicators"><h3>Technicals · daily</h3>
+      <div class="card" id="sec-news"><h3>News · <span class="tag ${d.news.tone === "positive" ? "good" : d.news.tone === "negative" ? "bad" : ""}">${d.news.tone}</span></h3>
+        ${d.news.items.map((n) => `<div class="news"><div>${esc(n.headline)}</div><div class="sub">${n.age_hours < 1 ? "under an hour" : Math.round(n.age_hours) + "h"} ago</div></div>`).join("")}</div>
+      <div class="card" id="sec-fundamentals"><h3>Fundamentals</h3><div class="grid2">
+        <div class="stat"><div class="k">Market cap</div><div class="v">${(f.market_cap / 1e9).toFixed(1)}B</div></div>
+        <div class="stat"><div class="k">P/E</div><div class="v">${f.pe} <span class="sub">${f.valuation}</span></div></div>
+        <div class="stat"><div class="k">Analyst target</div><div class="v">${money(f.target)}</div><div class="sub">${pct(f.dist_target)}</div></div>
+        <div class="stat"><div class="k">Earnings</div><div class="v">${fmtDate(f.earnings_date)}</div></div></div></div>
+      <div class="card" id="sec-indicators"><h3>Technicals · daily (reference)</h3>
         <div style="display:flex;justify-content:space-between"><span>RSI 14 <b>${ind.rsi}</b></span><span class="tag ${ind.rsi_state === "overbought" ? "bad" : ind.rsi_state === "oversold" ? "good" : ""}">${ind.rsi_state}</span></div>
         <div class="gauge"><i style="left:calc(${Math.min(100, Math.max(0, ind.rsi))}% - 2px)"></i></div>
         <div class="grid2" style="margin-top:12px">
@@ -211,20 +306,14 @@ async function renderSymbol(nav) {
           <div class="stat"><div class="k">Volume</div><div class="v">${ind.vol_ratio.toFixed(2)}×</div><div class="sub">${esc(ind.volume)} vs average</div></div></div></div>
       <div class="card" id="sec-levels"><h3>Support &amp; resistance</h3><div class="grid2">
         <div class="stat"><div class="k">Support</div><div class="v up">${money(lv.support)}</div><div class="sub">${lv.dist_support.toFixed(1)}% below${lv.near_support === "yes" ? " · near" : ""}</div></div>
-        <div class="stat"><div class="k">Resistance</div><div class="v down">${money(lv.resistance)}</div><div class="sub">${lv.dist_resistance.toFixed(1)}% above${lv.near_resistance === "yes" ? " · near" : ""}</div></div></div></div>
-      <div class="card" id="sec-news"><h3>News · <span class="tag ${d.news.tone === "positive" ? "good" : d.news.tone === "negative" ? "bad" : ""}">${d.news.tone}</span></h3>
-        ${d.news.items.map((n) => `<div class="news"><div>${esc(n.headline)}</div><div class="sub">${n.age_hours < 1 ? "under an hour" : Math.round(n.age_hours) + "h"} ago</div></div>`).join("")}</div>
-      <div class="card" id="sec-fundamentals"><h3>Fundamentals</h3><div class="grid2">
-        <div class="stat"><div class="k">Market cap</div><div class="v">${(f.market_cap / 1e9).toFixed(1)}B</div></div>
-        <div class="stat"><div class="k">P/E</div><div class="v">${f.pe} <span class="sub">${f.valuation}</span></div></div>
-        <div class="stat"><div class="k">Analyst target</div><div class="v">${money(f.target)}</div><div class="sub">${pct(f.dist_target)}</div></div>
-        <div class="stat"><div class="k">Earnings</div><div class="v">${fmtDate(f.earnings_date)}</div></div></div></div>`;
+        <div class="stat"><div class="k">Resistance</div><div class="v down">${money(lv.resistance)}</div><div class="sub">${lv.dist_resistance.toFixed(1)}% above${lv.near_resistance === "yes" ? " · near" : ""}</div></div></div></div>`;
   }
   const trade = d.quote_only ? "" : `<div class="grid2"><button class="btn go" onclick="UI.trade('${sym}','buy')">Buy</button><button class="btn sell" onclick="UI.trade('${sym}','sell')">Sell</button></div>`;
   $("view").innerHTML = head + body + trade;
   if (nav.byAgent) {
     if (tab === "options") flash("sec-options");
-    else flash("sec-" + ((nav.sections || []).find((s) => s !== "chart") || "chart"));
+    else if (focus.length) flash(focus.length === 1 && focus[0] === "rsi" ? "sec-rsi" : "sec-chart");
+    else flash("sec-" + ((nav.sections || []).find((s) => s !== "chart" && s !== "indicators" && s !== "levels") || "chart"));
   }
 }
 

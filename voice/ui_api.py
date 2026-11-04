@@ -176,7 +176,24 @@ _HOME_SECTION = {"get_portfolio": "positions", "what_if": "positions", "screen_w
                  "get_market": "market"}
 
 
-def nav_for(tool_calls: list[dict] | None, ticket_id: str | None = None, matches: list[str] | None = None) -> dict | None:
+def chart_focus(calls: list[dict], question: str = "") -> tuple[list[str], str | None]:
+    """What a technical question is about, for the chart to highlight: the overlays (rsi / ema / support /
+    resistance) and the timeframe of the indicator call. Support or resistance alone when only one was asked."""
+    focus, tf = [], None
+    q = (question or "").lower()
+    for c in calls:
+        a = c.get("args") or {}
+        if c["tool"] == "get_indicators":
+            tf = tf or a.get("timeframe") or "1D"
+            focus += {"rsi": ["rsi"], "ema": ["ema"], "volume": []}.get(a.get("indicator"), ["rsi", "ema"])
+        elif c["tool"] == "get_levels":
+            s, r = "support" in q, "resist" in q
+            focus += ["support"] if s and not r else ["resistance"] if r and not s else ["support", "resistance"]
+    return list(dict.fromkeys(focus)), tf
+
+
+def nav_for(tool_calls: list[dict] | None, ticket_id: str | None = None, matches: list[str] | None = None,
+            question: str = "") -> dict | None:
     """The screen for a turn: the most specific call wins (a ticket over a chain over a symbol page over home).
     `ticket_id`: the ticket draft_order created this turn; `matches`: screen_watchlist's symbols."""
     calls = [c for c in (tool_calls or []) if isinstance(c, dict) and c.get("tool")]
@@ -195,7 +212,11 @@ def nav_for(tool_calls: list[dict] | None, ticket_id: str | None = None, matches
     syms = [s for s in syms if s and s != "ALL"]
     if len(calls) <= 3 and syms and len(set(syms)) == 1:
         sections = [_SYMBOL_SECTION[c["tool"]] for c in calls if c["tool"] in _SYMBOL_SECTION]
-        return {"screen": "symbol", "symbol": syms[0], "tab": "overview", "sections": sections}
+        out = {"screen": "symbol", "symbol": syms[0], "tab": "overview", "sections": sections}
+        focus, tf = chart_focus(calls, question)
+        if focus or tf:
+            out.update(focus=focus, timeframe=tf or "1D")       # the page shows the chart, not a card
+        return out
     if any(c["tool"] == "get_orders" for c in calls):
         return {"screen": "activity"}
     if any(c["tool"] == "screen_watchlist" for c in calls):

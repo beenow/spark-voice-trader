@@ -55,7 +55,13 @@ def test_nav_for():
     n = nav([{"tool": "get_option_chain", "args": {"symbol": "TSLA", "expiry_rule": "next_week", "side": "put"}}])
     assert n["screen"] == "symbol" and n["tab"] == "options" and n["side"] == "put"
     n = nav([{"tool": "get_position", "args": {"symbol": "NVDA"}}, {"tool": "get_levels", "args": {"symbol": "NVDA"}}])
-    assert n == {"screen": "symbol", "symbol": "NVDA", "tab": "overview", "sections": ["position", "levels"]}
+    assert n["screen"] == "symbol" and n["sections"] == ["position", "levels"]
+    assert n.get("focus") == ["support", "resistance"] and n["timeframe"] == "1D"
+    n = nav([{"tool": "get_indicators", "args": {"symbol": "NVDA", "indicator": "rsi", "timeframe": "1H"}}])
+    assert n["focus"] == ["rsi"] and n["timeframe"] == "1H"
+    n = nav([{"tool": "get_levels", "args": {"symbol": "NVDA"}}], question="Is it near support?")
+    assert n["focus"] == ["support"]
+    assert "focus" not in nav([{"tool": "get_quote", "args": {"symbol": "NVDA"}}])
     assert nav([{"tool": "get_orders", "args": {}}])["screen"] == "activity"
     assert nav([{"tool": "screen_watchlist", "args": {}}], matches=["PEP"])["highlight"] == ["PEP"]
     assert nav([{"tool": "what_if", "args": {"symbol": "ALL", "move_pct": -10}}])["section"] == "positions"

@@ -234,6 +234,7 @@ class Session:
         self.outbox, self.inbox, self.events = queue.Queue(), queue.Queue(), []
         self.turn_events: list[dict] = []          # this turn's events so far, for the screen to show (nav)
         self.ticket_mark = len(self.world.tickets)
+        self.question = question
         self.backend = RemoteBackend(self.pb, self.outbox, self.inbox, self.frame_line)
         be, world = self.backend, self.world
 
@@ -320,7 +321,7 @@ class Session:
                    if e.get("type") == "tool_result" and e.get("tool") == "screen_watchlist"
                    for m in (e.get("words") or {}).get("matches", []) if isinstance(m, dict)]
         try:
-            return nav_for(calls, new[-1] if new else None, matches)
+            return nav_for(calls, new[-1] if new else None, matches, getattr(self, "question", ""))
         except Exception:  # noqa: BLE001 -- a screen hint must never cost the phone its answer
             log.exception("nav failed")
             return None
