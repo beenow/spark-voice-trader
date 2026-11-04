@@ -606,7 +606,7 @@ class MainActivity : Activity() {
         pressId++
         listenStart = SystemClock.elapsedRealtime()
         val g = glasses.device
-        if (g != null && prefs.getBoolean("glasses_mic", true) || prefs.getBoolean("mic_capture", true)) {
+        if (g != null && prefs.getBoolean("glasses_mic", true) || convo || prefs.getBoolean("mic_capture", false)) {
             glassesListen(r, g, pressId)
             return
         }
@@ -640,6 +640,7 @@ class MainActivity : Activity() {
                     return@ui
                 }
                 val pipe = android.os.ParcelFileDescriptor.createPipe()
+                closePipeRead(); pipeRead = pipe[0]
                 val m = GlassesAudio.MicStream(if (g != null) glasses.inputDevice else null, pipe[1], VAD_SILENCE_MS) {
                     ui { if (press == pressId && listening) stopListening() }     // hands-free: silence ends it
                 }
@@ -730,8 +731,8 @@ class MainActivity : Activity() {
         when {
             listening && !lastPartial.isNullOrBlank() -> { main.removeCallbacks(submitTurn); stopListening() }
             listening -> endConversation()
+            speaking > 0 && !busy -> { convo = true; startListening() }      // startListening stops the speaker
             busy -> { endConversation(); talk.text = "Stopping after this answer" }
-            speaking > 0 -> { convo = true; startListening() }      // startListening stops the speaker
             else -> { convo = true; startListening() }
         }
     }
@@ -742,6 +743,7 @@ class MainActivity : Activity() {
         if (listening) {
             listening = false; listenDone = true; releasedAt = 0
             mic?.let { it.stop(); mic = null }
+            closePipeRead()
             recognizer?.cancel()
             if (glassesTurn) { glassesTurn = false; Thread { glasses.release("conversation ended") }.start() }
         }
@@ -789,9 +791,14 @@ class MainActivity : Activity() {
         val m = mic
         if (!pipeSource || m == null) { r.startListening(recognizerIntent()); return }
         val pipe = android.os.ParcelFileDescriptor.createPipe()
+        closePipeRead(); pipeRead = pipe[0]      // the ended session's copy: closing it lets the writer see EPIPE
         m.swap(pipe[1])
         r.startListening(pipeIntent(pipe[0]))
     }
+
+    /** Our copy of the current session's read end (the recognizer gets its own dup through the intent). */
+    private var pipeRead: android.os.ParcelFileDescriptor? = null
+    private fun closePipeRead() { pipeRead?.let { runCatching { it.close() } }; pipeRead = null }
 
     private fun pipeIntent(src: android.os.ParcelFileDescriptor) = recognizerIntent().apply {
         putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE, src)
@@ -801,7 +808,16 @@ class MainActivity : Activity() {
     }
     @Volatile private var pipeSource = false
 
-    private fun joinHeld(t: String) = listOf(heldText, t.trim()).filter { it.isNotEmpty() }.joinToString(" ")
+    /** heldText + the new segment. The capture replays its last 700 ms into a new session, so the segment can
+     *  start with the held text's last words again ("What's driving Oracle" + "Oracle today"): drop that overlap. */
+    private fun joinHeld(t: String): String {
+        val a = heldText.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        var b = t.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        for (k in minOf(3, a.size, b.size) downTo 1) {
+            if (a.takeLast(k).map { it.lowercase() } == b.take(k).map { it.lowercase() }) { b = b.drop(k); break }
+        }
+        return (a + b).joinToString(" ")
+    }
     @Volatile private var pressId = 0
     @Volatile private var listenDone = true
     @Volatile private var turnReleaseAt = 0L
@@ -812,6 +828,9 @@ class MainActivity : Activity() {
         mic?.let { it.stop(); mic = null }       // closes the PCM pipe: end of audio for the recognizer
         recognizer?.stopListening()
         // If the final result is slow, go with the last partial (0 = always wait for the final).
+        // Nothing heard and no callback after the end of audio: don't sit on "Listening" forever.
+        val pressNow = pressId
+        main.postDelayed({ if (pressNow == pressId && !listenDone) { recognizer?.cancel(); finishListening(lastPartial, "timeout") } }, 3_000)
         val wait = prefs.getInt("stt_partial_ms", 600).toLong()
         val press = pressId                 // a later press must not be finished by this press's timer
         if (wait > 0) main.postDelayed({
@@ -824,6 +843,8 @@ class MainActivity : Activity() {
         if (listenDone) return
         listenDone = true
         main.removeCallbacks(submitTurn)
+        mic?.let { it.stop(); mic = null }      // an error can end the question while the capture still runs
+        closePipeRead()
         sttFinalMs = if (releasedAt > 0) SystemClock.elapsedRealtime() - releasedAt else -1
         sttKind = kind
         turnReleaseAt = releasedAt
@@ -972,8 +993,8 @@ class MainActivity : Activity() {
                         rec: JSONObject? = null) {
         specCancel = true
         turnSeq++
-        if (!modelLoaded) { note("model not loaded yet"); return }
-        if (busy) { rec?.let { it.put("error", "busy"); writeSoak(it) }; return }
+        if (!modelLoaded) { note("model not loaded yet"); resumeConversation(); return }
+        if (busy) { rec?.let { it.put("error", "busy"); writeSoak(it) }; resumeConversation(); return }
         busy = true
         ui { talk.alpha = 0.5f }
         resetChips()

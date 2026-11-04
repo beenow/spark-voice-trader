@@ -163,12 +163,16 @@ def repairs_on() -> bool:
 
 
 # Phone speech recognition mishears in an options conversation (seen on the Fold, Nov 4): "Tesla calls" ->
-# "Tesla cost", "and the puts" -> "and the post" (which then went to get_news). Only rewritten when the turn is about
-# options: the previous turn showed a chain or drafted an option, or this question names an expiry or a strike.
-_OPTION_TALK = re.compile(r"\b(?:next\s+week'?s?|this\s+week'?s?|weekly|weeklies|monthly|expir\w*|strikes?|"
-                          r"chain|options?|calls?|puts?)\b", re.I)
-_HEARD_CALLS = re.compile(r"\b(?:cost|costs|cause|cars|coals|colds|cols)\b", re.I)
-_HEARD_PUTS = re.compile(r"\b(?:post|posts|puds|pots|putts|put's)\b", re.I)
+# "Tesla cost", "and the puts" -> "and the post" (which then went to get_news). Narrow on purpose: only the LAST word
+# of the question ("cost basis", "post-market", "what could cause..." are left alone), and only when the previous turn
+# showed a chain or this question names an expiry ("next week's", "weekly", "expiring", a strike).
+_OPTION_TALK = re.compile(r"\b(?:next\s+week'?s?|this\s+week'?s?|weekly|weeklies|monthly|expir\w*|strikes?)\b", re.I)
+_HEARD_CALLS = re.compile(r"\b(?:cost|costs|cars)(?=\s*[?.!]?\s*$)", re.I)
+_HEARD_PUTS = re.compile(r"\b(?:post|posts|puds|pots|putts)(?=\s*[?.!]?\s*$)", re.I)
+
+
+# "Oracle" as the Fold heard it on Nov 4 ("What's driving allocal today" went to Tesla's news).
+_HEARD_ORACLE = re.compile(r"\b(?:allocal|alocal|oracal|orical|orakel)\b", re.I)
 
 
 def stt_repairs(question: str, history: list | None = None) -> str:
@@ -176,8 +180,9 @@ def stt_repairs(question: str, history: list | None = None) -> str:
     if not repairs_on():
         return question
     q = re.sub(r"^(\s*)(w)hat\s+(driving|moving|happening)\b", r"\1\2hat's \3", question, flags=re.I)
-    fr = last_frame(history or [])
-    options = bool(fr and any(c["tool"] in ("get_option_chain", "draft_order") for c in fr.get("calls", []))) \
+    q = _HEARD_ORACLE.sub("Oracle", q)
+    prev = getattr(history[-1], "frame", None) if history else None
+    options = bool(prev and any(c["tool"] == "get_option_chain" for c in prev.get("calls", []))) \
         or bool(_OPTION_TALK.search(q))
     if options:
         q = _HEARD_CALLS.sub("calls", q)

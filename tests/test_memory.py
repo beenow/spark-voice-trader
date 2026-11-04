@@ -486,3 +486,20 @@ def test_stt_repairs_options_mishears():
     assert stt_repairs("And the post", []) == "And the post"                       # no options context
     assert stt_repairs("What's the cost of my position", []) == "What's the cost of my position"
     assert stt_repairs("What driving oracle today", []) == "What's driving oracle today"
+
+
+def test_stt_repairs_leaves_normal_questions():
+    from agent.memory import stt_repairs
+
+    class T:
+        frame = {"calls": [{"tool": "get_option_chain", "args": {}}]}
+
+    assert stt_repairs("What could cause Tesla to drop this week", []) == "What could cause Tesla to drop this week"
+    assert stt_repairs("What's my cost basis on Nvidia", [T()]) == "What's my cost basis on Nvidia"
+    assert stt_repairs("How did Tesla do post-market", [T()]) == "How did Tesla do post-market"
+    assert stt_repairs("What's the weekly cost?", []) == "What's the weekly calls?"   # expiry named + last word
+
+
+def test_stt_repairs_oracle():
+    from agent.memory import stt_repairs
+    assert stt_repairs("What's driving allocal today", []) == "What's driving Oracle today"
